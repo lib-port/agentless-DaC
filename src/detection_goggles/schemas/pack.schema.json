@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://detection-goggles.dev/schemas/pack.schema.json",
+  "title": "Detection Pack manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "pack", "compatibility", "capabilities", "detections", "reporting"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "pack": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "name", "version", "description", "maintainer"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 80 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+        "description": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "maintainer": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "first_party": { "type": "boolean", "default": false },
+        "upstream": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["provider", "content"],
+          "properties": {
+            "provider": { "type": "string", "minLength": 1, "maxLength": 120 },
+            "content": { "type": "string", "minLength": 1, "maxLength": 160 },
+            "url": { "type": "string", "format": "uri", "maxLength": 500 }
+          }
+        }
+      }
+    },
+    "compatibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["core", "artifact_platforms"],
+      "properties": {
+        "core": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "artifact_platforms": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["linux", "windows", "macos", "any"] }
+        }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sources", "remote_execution"],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["files", "evidence", "ssh"] }
+        },
+        "remote_execution": { "type": "boolean" }
+      }
+    },
+    "detections": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[A-Z][A-Z0-9-]{2,63}$" }
+    },
+    "reporting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["formats"],
+      "properties": {
+        "formats": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["json", "markdown"] }
+        }
+      }
+    }
+  }
+}

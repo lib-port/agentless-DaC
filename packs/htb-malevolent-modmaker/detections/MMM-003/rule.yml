@@ -1,0 +1,33 @@
+schema_version: 1
+id: MMM-003
+title: Malevolent ModMaker loader and ransomware chain correlation
+description: >-
+  Correlates a downloader/process-execution profile with a Go AES-GCM file
+  transformation profile on distinct artifacts across the supplied evidence set.
+  Requiring both roles and at least two artifacts gives higher confidence than either
+  static capability in isolation.
+severity: critical
+confidence: high
+tags:
+  - htb
+  - sherlock
+  - malevolent-modmaker
+  - correlation
+  - ransomware
+mitre_attack:
+  tactics:
+    - Execution
+    - Command and Control
+    - Impact
+  techniques:
+    - T1105
+    - T1204.002
+    - T1486
+requires:
+  artifact_kinds:
+    - file
+implementation:
+  engine: python-subprocess
+  scope: bundle
+  entrypoint: detect.py
+  timeout_seconds: 10

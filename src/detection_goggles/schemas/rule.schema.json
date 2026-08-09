@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://detection-goggles.dev/schemas/rule.schema.json",
+  "title": "Detection rule",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "title", "description", "severity", "confidence", "requires", "implementation"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9-]{2,63}$" },
+    "title": { "type": "string", "minLength": 1, "maxLength": 160 },
+    "description": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "severity": { "enum": ["informational", "low", "medium", "high", "critical"] },
+    "confidence": { "enum": ["low", "medium", "high"] },
+    "tags": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9]+(?:[-_.][a-z0-9]+)*$", "maxLength": 80 }
+    },
+    "mitre_attack": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tactics": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1, "maxLength": 80 }
+        },
+        "techniques": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "pattern": "^T[0-9]{4}(?:\\.[0-9]{3})?$" }
+        }
+      }
+    },
+    "requires": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_kinds"],
+      "properties": {
+        "artifact_kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "enum": ["file"] }
+        }
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["engine", "scope", "entrypoint"],
+      "properties": {
+        "engine": { "const": "python-subprocess" },
+        "scope": { "enum": ["artifact", "bundle"] },
+        "entrypoint": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.py$", "maxLength": 120 },
+        "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 30 }
+      }
+    }
+  }
+}
+

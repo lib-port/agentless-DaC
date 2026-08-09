@@ -1,0 +1,30 @@
+schema_version: 1
+id: MMM-002
+title: PE downloader and process-execution behavior cluster
+description: >-
+  Identifies a Windows PE combining HTTP client or embedded URL traits with process
+  execution and a supporting Go, elevation, or defense-evasion trait. This detects the
+  suspicious loader behavior represented in the Sherlock while avoiding fixed C2 data.
+severity: medium
+confidence: medium
+tags:
+  - htb
+  - sherlock
+  - malevolent-modmaker
+  - windows
+  - downloader
+mitre_attack:
+  tactics:
+    - Execution
+    - Command and Control
+  techniques:
+    - T1105
+    - T1204.002
+requires:
+  artifact_kinds:
+    - file
+implementation:
+  engine: python-subprocess
+  scope: artifact
+  entrypoint: detect.py
+  timeout_seconds: 10

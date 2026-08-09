@@ -1,0 +1,2 @@
+This synthetic fixture contains no executable content or malicious indicators.
+It is safe to keep in source control.

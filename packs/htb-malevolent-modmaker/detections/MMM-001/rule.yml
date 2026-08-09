@@ -1,0 +1,31 @@
+schema_version: 1
+id: MMM-001
+title: Go PE with AES-GCM file transformation capability
+description: >-
+  Identifies a Windows PE containing Go runtime traits, AES-GCM cryptographic
+  primitives, and a cluster of file traversal, read, write, or removal operations.
+  The conjunction is intended to identify the ransomware component without relying
+  on a challenge-specific filename or unpublished hash.
+severity: high
+confidence: high
+tags:
+  - htb
+  - sherlock
+  - malevolent-modmaker
+  - windows
+  - go
+  - ransomware
+mitre_attack:
+  tactics:
+    - Impact
+  techniques:
+    - T1486
+requires:
+  artifact_kinds:
+    - file
+implementation:
+  engine: python-subprocess
+  scope: artifact
+  entrypoint: detect.py
+  timeout_seconds: 10
+

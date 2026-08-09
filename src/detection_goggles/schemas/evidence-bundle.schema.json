@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://detection-goggles.dev/schemas/evidence-bundle.schema.json",
+  "title": "Evidence bundle manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "run_id", "created_at", "source", "artifacts", "acquisition_issues"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "run_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{8,80}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "inputs"],
+      "properties": {
+        "type": { "enum": ["local_files", "ssh"] },
+        "target": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "inputs": {
+          "type": "array",
+          "maxItems": 5000,
+          "items": { "type": "string", "maxLength": 4096 }
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 5000,
+      "items": { "$ref": "#/$defs/artifact" }
+    },
+    "acquisition_issues": {
+      "type": "array",
+      "maxItems": 10000,
+      "items": { "$ref": "#/$defs/issue" }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "display_path", "size", "sha256", "media_type", "modified_ns", "content_ref", "acquisition"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^file-[0-9]{4,}$" },
+        "kind": { "const": "file" },
+        "display_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+        "size": { "type": "integer", "minimum": 0, "maximum": 1073741824 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "media_type": { "type": "string", "minLength": 1, "maxLength": 160 },
+        "modified_ns": { "type": "integer", "minimum": 0 },
+        "content_ref": { "type": "string", "pattern": "^artifacts/file-[0-9]{4,}$" },
+        "acquisition": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "source"],
+          "properties": {
+            "status": { "const": "complete" },
+            "source": { "enum": ["local_files", "ssh"] }
+          }
+        }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "code", "message"],
+      "properties": {
+        "path": { "type": "string", "maxLength": 4096 },
+        "code": { "enum": ["not_found", "permission_denied", "not_regular", "symlink_rejected", "directory_requires_recursive", "size_limit", "file_limit", "io_error"] },
+        "message": { "type": "string", "minLength": 1, "maxLength": 1000 }
+      }
+    }
+  }
+}

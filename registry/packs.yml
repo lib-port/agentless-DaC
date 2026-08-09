@@ -1,0 +1,14 @@
+schema_version: 1
+
+# Source registry. Maintainers build and verify the immutable archive locally, then
+# publish it manually with its SHA-256 checksum.
+packs:
+  - id: htb-malevolent-modmaker
+    version: 0.1.1
+    core: ">=0.1.0,<1.0.0"
+    platform: windows
+    source: packs/htb-malevolent-modmaker
+    archive: htb-malevolent-modmaker-0.1.1.tar.gz
+    sha256: 79083d7e291a4687edae28c91df153c652772899c483a34bc91ee47eeb732e1b
+    url: https://github.com/libport/agentless-DaC/releases/download/pack-htb-malevolent-modmaker-v0.1.1/htb-malevolent-modmaker-0.1.1.tar.gz
+    release_tag: pack-htb-malevolent-modmaker-v0.1.1

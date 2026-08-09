@@ -1,0 +1,37 @@
+schema_version: 1
+
+pack:
+  id: htb-malevolent-modmaker
+  name: Malevolent ModMaker Detection Pack
+  version: 0.1.1
+  description: >-
+    First-party static detections for user-supplied artifacts from Hack The Box's
+    Malevolent ModMaker Sherlock. Challenge binaries are not redistributed.
+  maintainer: libport
+  first_party: true
+  upstream:
+    provider: Hack The Box
+    content: Sherlock - Malevolent ModMaker
+    url: https://app.hackthebox.com/sherlocks
+
+compatibility:
+  core: ">=0.1.0,<1.0.0"
+  artifact_platforms:
+    - windows
+
+capabilities:
+  sources:
+    - files
+    - evidence
+    - ssh
+  remote_execution: false
+
+detections:
+  - MMM-001
+  - MMM-002
+  - MMM-003
+
+reporting:
+  formats:
+    - json
+    - markdown

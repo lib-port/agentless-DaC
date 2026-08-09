@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://detection-goggles.dev/schemas/registry.schema.json",
+  "title": "Detection Pack registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "packs"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "packs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version", "core", "platform", "archive", "sha256", "url", "release_tag"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+          "version": { "type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+          "core": { "type": "string", "minLength": 1, "maxLength": 80 },
+          "platform": { "enum": ["linux", "windows", "macos", "any"] },
+          "source": { "type": "string", "minLength": 1, "maxLength": 500 },
+          "archive": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+\\.tar\\.gz$" },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "url": { "type": "string", "format": "uri", "maxLength": 1000 },
+          "release_tag": { "type": "string", "minLength": 1, "maxLength": 200 }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,88 @@
+---
+- name: Snapshot explicitly selected files
+  hosts: dac_target
+  gather_facts: false
+  tasks:
+    - name: Inspect explicitly selected paths without following links
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+        follow: false
+        get_attributes: false
+        get_checksum: false
+        get_mime: false
+      loop: "{{ dac_remote_files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: dac_file_stats
+      ignore_errors: true
+      become: "{{ dac_become | bool }}"
+
+    - name: Record bounded file metadata on the controller
+      ansible.builtin.copy:
+        content: >-
+          {{ {
+            'exists': (item.stat.exists | default(false) | bool),
+            'is_regular': (item.stat.isreg | default(false) | bool),
+            'is_link': (item.stat.islnk | default(false) | bool),
+            'failed': (item.failed | default(false) | bool),
+            'size': (item.stat.size | default(0) | int),
+            'modified_ns': (((item.stat.mtime | default(0) | float) * 1000000000) | int)
+          } | to_json }}
+        dest: "{{ dac_status_staging }}/{{ item.item.id }}.json"
+        mode: "0600"
+      loop: "{{ dac_file_stats.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+      delegate_to: localhost
+      become: false
+
+    - name: Initialize the bounded transfer set
+      ansible.builtin.set_fact:
+        dac_selected_files: []
+        dac_selected_bytes: 0
+
+    - name: Select regular files within transfer limits
+      ansible.builtin.set_fact:
+        dac_selected_files: "{{ dac_selected_files + [item.item] }}"
+        dac_selected_bytes: >-
+          {{ (dac_selected_bytes | int) + (item.stat.size | int) }}
+      loop: "{{ dac_file_stats.results }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+      when:
+        - not (item.failed | default(false) | bool)
+        - item.stat.exists | default(false) | bool
+        - item.stat.isreg | default(false) | bool
+        - not (item.stat.islnk | default(false) | bool)
+        - (item.stat.size | default(0) | int) <= (dac_max_file_size | int)
+        - >-
+          (dac_selected_bytes | int) + (item.stat.size | default(0) | int)
+          <= (dac_max_total_size | int)
+
+    - name: Fetch only the selected regular files
+      ansible.builtin.fetch:
+        src: "{{ item.path }}"
+        dest: "{{ dac_local_staging }}/{{ item.id }}"
+        flat: true
+        fail_on_missing: true
+        validate_checksum: true
+      loop: "{{ dac_selected_files }}"
+      loop_control:
+        label: "{{ item.path }}"
+      register: dac_fetch_results
+      ignore_errors: true
+      become: "{{ dac_become | bool }}"
+
+    - name: Record every fetch outcome on the controller
+      ansible.builtin.copy:
+        content: >-
+          {{ {
+            'failed': (item.failed | default(false) | bool)
+          } | to_json }}
+        dest: "{{ dac_status_staging }}/{{ item.item.id }}.fetch.json"
+        mode: "0600"
+      loop: "{{ dac_fetch_results.results | default([]) }}"
+      loop_control:
+        label: "{{ item.item.path }}"
+      delegate_to: localhost
+      become: false

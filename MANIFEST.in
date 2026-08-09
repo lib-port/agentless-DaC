@@ -1,0 +1,10 @@
+include LICENSE
+include README.md
+include SECURITY.md
+include DEVELOPMENT.md
+recursive-include docs *.md
+recursive-include registry *.yml
+prune packs
+prune tests
+global-exclude *.py[cod]
+global-exclude __pycache__

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://detection-goggles.dev/schemas/evaluation.schema.json",
+  "title": "Rule evaluation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "rule_id", "status", "subject_ids", "finding_ids", "duration_ms"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^eval-[a-f0-9]{12}$" },
+    "rule_id": { "type": "string", "pattern": "^[A-Z][A-Z0-9-]{2,63}$" },
+    "status": { "enum": ["detected", "not_detected", "unknown", "error", "not_applicable"] },
+    "subject_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^file-[0-9]{4,}$" }
+    },
+    "finding_ids": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^finding-[a-f0-9]{12}$" }
+    },
+    "duration_ms": { "type": "integer", "minimum": 0 },
+    "reason": { "type": "string", "minLength": 1, "maxLength": 1000 }
+  }
+}
+
