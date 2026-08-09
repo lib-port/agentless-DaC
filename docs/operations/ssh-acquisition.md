@@ -50,8 +50,11 @@ dacctl run ssh htb-malevolent-modmaker \
   --output ./reports
 ```
 
-The adapter forwards `SSH_AUTH_SOCK` but does not forward arbitrary caller environment
-variables to Ansible.
+The adapter passes the current controller process's `SSH_AUTH_SOCK` to Ansible but does
+not pass arbitrary caller environment variables. In the disposable Vagrant profile,
+`scripts/vm-shell` prevents the physical host's agent from entering the VM. Start an agent
+inside the guest and load only the per-VM key; only that guest-local socket can reach
+Ansible.
 
 ## Procedure: explicit private key
 

@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+readonly PROJECT_ROOT
+readonly VALIDATION_LOCK="${PROJECT_ROOT}/requirements/vm.lock"
+readonly RUNTIME_LOCK="${PROJECT_ROOT}/requirements/vm-runtime.lock"
+readonly PYPI_INDEX="https://pypi.org/simple"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/vm-locks check|update
+
+  check   install and validate the committed hash-pinned environments
+  update  resolve current wheels from canonical PyPI, validate them, and
+          atomically replace each VM lock file
+
+Run only with CPython 3.11 on x86_64 Linux, matching the controller guest.
+EOF
+}
+
+fail() {
+  printf 'vm-locks: %s\n' "$*" >&2
+  exit 1
+}
+
+(($# == 1)) || {
+  usage >&2
+  exit 2
+}
+case "$1" in
+  check|update)
+    action=$1
+    ;;
+  -h|--help)
+    usage
+    exit 0
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+readonly action
+
+command -v python3 >/dev/null 2>&1 || fail "python3 is required"
+[[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || \
+  fail "x86_64 Linux is required"
+[[ "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == 3.11 ]] || \
+  fail "CPython 3.11 is required"
+
+umask 077
+work_dir="$(mktemp -d)"
+readonly work_dir
+publish_dir=""
+cleanup() {
+  rm -rf -- "$work_dir"
+  if [[ -n "$publish_dir" && -d "$publish_dir" ]]; then
+    rm -f -- "$publish_dir/vm.lock" "$publish_dir/vm-runtime.lock"
+    rmdir -- "$publish_dir" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+resolve_lock() {
+  local profile=$1
+  local output=$2
+  local wheel_dir="${work_dir}/wheels-${profile}"
+  local roots_output
+  local -a roots
+
+  mkdir -m 0700 -- "$wheel_dir"
+  roots_output="$(python3 "${SCRIPT_DIR}/vm_locks.py" \
+    roots "$PROJECT_ROOT/pyproject.toml" "$profile")" || \
+    fail "could not read dependency roots from pyproject.toml"
+  mapfile -t roots <<<"$roots_output"
+  ((${#roots[@]} > 0)) || fail "no dependency roots were found for ${profile}"
+
+  python3 -m pip --isolated --disable-pip-version-check \
+    download \
+    --no-cache-dir \
+    --only-binary=:all: \
+    --index-url "$PYPI_INDEX" \
+    --dest "$wheel_dir" \
+    "${roots[@]}"
+
+  python3 "${SCRIPT_DIR}/vm_locks.py" generate "$wheel_dir" "$output" "$profile" || \
+    fail "resolved ${profile} wheels could not be locked"
+}
+
+validate_lock_contract() {
+  python3 "${SCRIPT_DIR}/vm_locks.py" validate "$1" "$2" || \
+    fail "VM lock-file contract validation failed"
+}
+
+install_and_check_locks() {
+  local validation_lock=$1
+  local runtime_lock=$2
+  local validation_venv="${work_dir}/validation-venv"
+  local runtime_venv="${work_dir}/runtime-venv"
+  local wheel_output="${work_dir}/project-wheel"
+  local project_source="${work_dir}/project-source"
+  local project_wheel
+
+  validate_lock_contract "$validation_lock" "$runtime_lock"
+  python3 "${SCRIPT_DIR}/vm_locks.py" copy-source "$PROJECT_ROOT" "$project_source" || \
+    fail "project build inputs could not be staged safely"
+  python3 -m venv "$validation_venv"
+  "$validation_venv/bin/python" -m pip --isolated --disable-pip-version-check \
+    install \
+    --no-cache-dir \
+    --require-hashes \
+    --only-binary=:all: \
+    --index-url "$PYPI_INDEX" \
+    --requirement "$validation_lock"
+  "$validation_venv/bin/python" -m pip --isolated --disable-pip-version-check \
+    install --no-cache-dir --no-build-isolation --no-deps "$project_source"
+  "$validation_venv/bin/python" -m pip check
+
+  mkdir -m 0700 -- "$wheel_output"
+  "$validation_venv/bin/python" -m build --wheel --no-isolation \
+    --outdir "$wheel_output" "$project_source"
+  project_wheel="$(find "$wheel_output" -maxdepth 1 -type f \
+    -name 'detection_goggles-*.whl' -print -quit)"
+  [[ -n "$project_wheel" && -f "$project_wheel" ]] || \
+    fail "validation environment did not build the project wheel"
+
+  python3 -m venv "$runtime_venv"
+  "$runtime_venv/bin/python" -m pip --isolated --disable-pip-version-check \
+    install \
+    --no-cache-dir \
+    --require-hashes \
+    --only-binary=:all: \
+    --index-url "$PYPI_INDEX" \
+    --requirement "$runtime_lock"
+  "$runtime_venv/bin/python" -m pip --isolated --disable-pip-version-check \
+    install --no-cache-dir --no-deps "$project_wheel"
+  "$runtime_venv/bin/python" -m pip --isolated uninstall --yes setuptools >/dev/null
+  "$runtime_venv/bin/python" -m pip check
+}
+
+if [[ "$action" == check ]]; then
+  install_and_check_locks "$VALIDATION_LOCK" "$RUNTIME_LOCK"
+  printf '%s\n' 'Both VM lock files are complete, hash-valid, and installable.'
+  exit 0
+fi
+
+generated_validation="${work_dir}/vm.lock"
+generated_runtime="${work_dir}/vm-runtime.lock"
+readonly generated_validation generated_runtime
+resolve_lock validation "$generated_validation"
+resolve_lock runtime "$generated_runtime"
+install_and_check_locks "$generated_validation" "$generated_runtime"
+publish_dir="$(mktemp -d "${PROJECT_ROOT}/requirements/.vm-locks.XXXXXX")"
+install -m 0644 -- "$generated_validation" "$publish_dir/vm.lock"
+install -m 0644 -- "$generated_runtime" "$publish_dir/vm-runtime.lock"
+mv --force --no-target-directory -- "$publish_dir/vm.lock" "$VALIDATION_LOCK"
+mv --force --no-target-directory -- "$publish_dir/vm-runtime.lock" "$RUNTIME_LOCK"
+rmdir -- "$publish_dir"
+publish_dir=""
+printf '%s\n' \
+  'Updated requirements/vm.lock and requirements/vm-runtime.lock.' \
+  'Review every version and digest change before committing.'

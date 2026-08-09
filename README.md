@@ -25,6 +25,9 @@ malware, credentials, or sensitive evidence to the maintainer. Read
   trust boundaries, packaging, and extension rules.
 - [Operational playbooks](docs/operations/README.md): controller setup, local analysis,
   SSH acquisition, replay, pack lifecycle, and troubleshooting.
+- [Disposable Vagrant controller](docs/operations/vagrant-controller.md): hardened,
+  disposable isolation on a bare-metal Debian 12 amd64 KVM/libvirt host, with guest-only
+  evidence and report-only export.
 - [Security policy](SECURITY.md): unsupported security-reporting posture and known
   operational boundaries.
 - [Maintainer development guide](DEVELOPMENT.md): internal pack contract and validation

@@ -1,0 +1,12 @@
+#!/bin/sh
+set -eu
+
+umask 077
+export HOME=/home/dac
+export XDG_CACHE_HOME=/var/lib/detection-goggles/cache
+export XDG_DATA_HOME=/var/lib/detection-goggles/data
+export TMPDIR=/var/lib/detection-goggles/tmp
+
+cd /var/lib/detection-goggles
+exec /opt/detection-goggles/.venv/bin/dacctl \
+  --pack-root /opt/detection-goggles/packs "$@"

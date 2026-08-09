@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+readonly PROJECT_ROOT
+readonly STATE_DIR="${PROJECT_ROOT}/.vagrant"
+readonly STATE_FILE="${STATE_DIR}/dac-vm.json"
+readonly SOURCE_ARCHIVE="${STATE_DIR}/dac-source.tar"
+readonly BOX_NAME="debian/bookworm64"
+readonly BOX_VERSION="12.20260519.1"
+readonly BOX_PROVIDER="libvirt"
+readonly BOX_SHA256="a7d25c16b12f22214cfd8f612e1d207334be275a57da1011b1f2d00ec77815b2"
+readonly VAGRANT_VERSION="2.3.4"
+readonly VAGRANT_LIBVIRT_VERSION="0.12.2"
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/vm-init --target-ip IPV4 --target-port PORT \
+  --host-key-fingerprint SHA256:FINGERPRINT
+
+Create and seal a disposable Detection Goggles controller on a bare-metal
+Debian 12 amd64 KVM/libvirt host with the exact supported Vagrant toolchain.
+The target must be supplied as a literal IPv4 address so the guest firewall can
+enforce a single-destination SSH policy.
+EOF
+}
+
+fail() {
+  printf 'vm-init: %s\n' "$*" >&2
+  exit 1
+}
+
+target_ip=""
+target_port=""
+host_key_fingerprint=""
+
+while (($#)); do
+  case "$1" in
+    --target-ip)
+      (($# >= 2)) || fail "--target-ip requires a value"
+      target_ip=$2
+      shift 2
+      ;;
+    --target-port)
+      (($# >= 2)) || fail "--target-port requires a value"
+      target_port=$2
+      shift 2
+      ;;
+    --host-key-fingerprint)
+      (($# >= 2)) || fail "--host-key-fingerprint requires a value"
+      host_key_fingerprint=$2
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      fail "unknown argument: $1"
+      ;;
+  esac
+done
+
+[[ -n "$target_ip" ]] || fail "--target-ip is required"
+[[ -n "$target_port" ]] || fail "--target-port is required"
+[[ -n "$host_key_fingerprint" ]] || fail "--host-key-fingerprint is required"
+[[ "$target_port" =~ ^[0-9]+$ ]] || fail "target port must be numeric"
+((target_port >= 1 && target_port <= 65535)) || fail "target port must be between 1 and 65535"
+[[ "$host_key_fingerprint" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || \
+  fail "host-key fingerprint must use the OpenSSH SHA256 format"
+
+for command_name in git python3 systemd-detect-virt vagrant virsh; do
+  command -v "$command_name" >/dev/null 2>&1 || fail "$command_name is required"
+done
+
+[[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]] || \
+  fail "a bare-metal x86_64 Linux host is required"
+if systemd-detect-virt --quiet; then
+  fail "nested virtualization is unsupported; use a bare-metal Debian 12 host"
+fi
+python3 - <<'PY' || fail "the supported host is Debian 12"
+import pathlib
+
+values = {}
+for line in pathlib.Path("/etc/os-release").read_text(encoding="utf-8").splitlines():
+    key, separator, value = line.partition("=")
+    if separator:
+        values[key] = value.strip('"')
+if values.get("ID") != "debian" or values.get("VERSION_ID") != "12":
+    raise SystemExit(1)
+PY
+[[ "$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" == 3.11 ]] || \
+  fail "CPython 3.11 is required on the Debian 12 host"
+
+python3 - "$target_ip" <<'PY' || fail "target must be a literal, unicast IPv4 address"
+import ipaddress
+import sys
+
+address = ipaddress.ip_address(sys.argv[1])
+if address.version != 4 or address.is_multicast or address.is_unspecified:
+    raise SystemExit(1)
+PY
+
+[[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]] || \
+  fail "/dev/kvm is unavailable; run this profile on a bare-metal KVM host"
+virsh -c qemu:///system list >/dev/null 2>&1 || \
+  fail "libvirt system access failed; verify group membership and libvirt configuration"
+installed_vagrant_version="$(vagrant --version | awk 'NR == 1 {print $2}')"
+[[ "$installed_vagrant_version" == "$VAGRANT_VERSION" ]] || \
+  fail "Vagrant ${VAGRANT_VERSION} is required; found ${installed_vagrant_version:-unknown}"
+installed_provider_version="$(
+  vagrant plugin list | sed -n 's/^vagrant-libvirt (\([^,)]*\).*/\1/p'
+)"
+[[ "$installed_provider_version" == "$VAGRANT_LIBVIRT_VERSION" ]] || \
+  fail "vagrant-libvirt ${VAGRANT_LIBVIRT_VERSION} is required; found ${installed_provider_version:-none}"
+
+cd -- "$PROJECT_ROOT"
+[[ -z "$(git status --porcelain=v1 --untracked-files=all)" ]] || \
+  fail "the Git worktree must be completely clean before creating an operational VM"
+[[ ! -e "$STATE_FILE" ]] || \
+  fail "VM state already exists; use scripts/vm-destroy before creating another controller"
+
+commit="$(git rev-parse --verify HEAD)"
+readonly commit
+umask 077
+mkdir -p -- "$STATE_DIR"
+chmod 0700 "$STATE_DIR"
+
+vagrant_attempted=false
+cleanup() {
+  if [[ -f "$SOURCE_ARCHIVE" ]]; then
+    rm -f -- "$SOURCE_ARCHIVE"
+  fi
+  if [[ "$vagrant_attempted" == false && -f "$STATE_FILE" ]]; then
+    rm -f -- "$STATE_FILE"
+  fi
+}
+trap cleanup EXIT
+
+python3 - "$STATE_FILE" "$target_ip" "$target_port" "$host_key_fingerprint" "$commit" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+destination, target_ip, target_port, fingerprint, commit = sys.argv[1:]
+payload = {
+    "target_ip": target_ip,
+    "target_port": int(target_port),
+    "host_key_fingerprint": fingerprint,
+    "commit": commit,
+}
+directory = os.path.dirname(destination)
+descriptor, temporary = tempfile.mkstemp(prefix=".dac-vm-", dir=directory, text=True)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, destination)
+except BaseException:
+    try:
+        os.unlink(temporary)
+    except FileNotFoundError:
+        pass
+    raise
+PY
+
+python3 - "$BOX_NAME" "$BOX_VERSION" "$BOX_PROVIDER" "$BOX_SHA256" <<'PY'
+import json
+import sys
+import urllib.request
+
+name, wanted_version, wanted_provider, wanted_digest = sys.argv[1:]
+url = f"https://vagrantcloud.com/api/v2/vagrant/{name}"
+with urllib.request.urlopen(url, timeout=20) as response:
+    metadata = json.load(response)
+for version in metadata.get("versions", []):
+    if version.get("version") != wanted_version or version.get("status") != "active":
+        continue
+    for provider in version.get("providers", []):
+        if provider.get("name") != wanted_provider:
+            continue
+        if provider.get("checksum_type") != "sha256":
+            raise SystemExit("pinned box metadata does not declare a SHA-256 checksum")
+        if provider.get("checksum") != wanted_digest:
+            raise SystemExit("pinned box checksum differs from the reviewed value")
+        break
+    else:
+        raise SystemExit("pinned box provider is not available")
+    break
+else:
+    raise SystemExit("pinned box version is not active")
+PY
+
+git archive --format=tar --prefix=detection-goggles/ HEAD >"$SOURCE_ARCHIVE"
+chmod 0600 "$SOURCE_ARCHIVE"
+
+vagrant validate
+vagrant_attempted=true
+vagrant up controller --provider=libvirt
+rm -f -- "$SOURCE_ARCHIVE"
+vagrant reload controller
+"${SCRIPT_DIR}/vm-verify"
+
+printf '%s\n' \
+  "Controller VM created and sealed at commit ${commit}." \
+  "Next: scripts/vm-shell" \
+  "Then initialize the guest-only target key with: dac-key-init"

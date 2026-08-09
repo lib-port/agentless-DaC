@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
+PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
+readonly PROJECT_ROOT
+readonly STATE_DIR="${PROJECT_ROOT}/.vagrant"
+readonly STATE_FILE="${STATE_DIR}/dac-vm.json"
+
+[[ -f "$STATE_FILE" ]] || {
+  printf 'vm-destroy: controller state is missing\n' >&2
+  exit 1
+}
+
+target="$(python3 - "$STATE_FILE" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    state = json.load(handle)
+print(f"{state['target_ip']}:{state['target_port']}")
+PY
+)"
+
+cd -- "$PROJECT_ROOT"
+vagrant destroy -f controller
+rm -f -- "$STATE_FILE" "${STATE_DIR}/dac-source.tar"
+
+printf '%s\n' \
+  "Controller destroyed. Its private target key and guest-only evidence are no longer available." \
+  "Revoke the public key whose comment starts with 'dac-controller-' on target ${target}." \
+  "Explicitly exported host reports were not removed."

@@ -5,6 +5,10 @@
 Prepare an isolated controller with the Detection Goggles core and the one first-party
 Malevolent ModMaker Detection Pack.
 
+This playbook installs directly into an already isolated controller. To create a
+disposable KVM guest on the supported bare-metal Debian 12 amd64 host, use the
+[Vagrant controller playbook](vagrant-controller.md) instead.
+
 ## Preconditions
 
 - Python 3.11 or newer is installed.

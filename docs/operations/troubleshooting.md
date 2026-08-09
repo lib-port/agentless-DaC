@@ -35,6 +35,48 @@ ssh-keygen -F "${HOST}"
 Run diagnostics from the same virtual environment, working directory, user account,
 pack roots, and network context as the failed operation.
 
+## Disposable controller VM
+
+Use this section with the
+[disposable Vagrant controller playbook](vagrant-controller.md). Do not bypass a failed
+isolation check or continue using a partially provisioned guest.
+
+Start on the physical Debian 12 host from the repository root:
+
+```bash
+test "$(vagrant --version)" = "Vagrant 2.3.4"
+virsh -c qemu:///system list
+vagrant plugin list
+git status --short
+```
+
+Respond according to the failed lifecycle stage:
+
+| Symptom or stage | Required response |
+| --- | --- |
+| A KVM, libvirt, Vagrant, provider, argument, box-metadata, or clean-worktree preflight fails before `vagrant up` | Correct the reported host or input condition and rerun. Do not change a reviewed digest to match unexpected metadata. |
+| `VM state already exists` | Run `scripts/vm-verify`. If it is the expected healthy controller, continue using it; otherwise destroy it with `scripts/vm-destroy` before rebuilding. |
+| `vagrant up`, provisioning, reload, or `scripts/vm-verify` fails | Treat the VM as incomplete. Revoke its target key if registered, run `scripts/vm-destroy`, correct the underlying condition, and rebuild from a clean commit. |
+| The scanned SSH key does not match the sealed fingerprint | Stop. Reconfirm the fingerprint through the independent channel. A legitimate corrected or rotated key requires destroying and rebuilding the controller with the new fingerprint. |
+| Key generation is interrupted, uses an empty passphrase, or reports partial/unsafe key state | Destroy the VM. Do not repair or reuse the guest disk. Revoke a public key if it was registered. |
+| The configured target works but DNS, HTTPS, another IP, or another port does not | This is the intended sealed-egress policy. A different target or port requires a rebuild. |
+| The configured target is unreachable | Confirm its literal IP, port, route, service, and independently verified host key. Do not open general egress. If the sealed values are wrong, rebuild. |
+| `vm-pull-report` rejects a run ID or guest report | Confirm the printed run ID and that both `report.json` and `report.md` still exist in the guest run directory. Do not replace the exporter with `scp` or copy raw evidence. |
+| `vm-pull-report` says the destination exists | Select a new empty destination. Remove an old export only through the operator's approved retention process; the command intentionally never overwrites it. |
+| `vm-destroy` fails | Assume the disk and private key remain. Revoke the target key immediately, restore libvirt/Vagrant access, and rerun the command. Do not claim destruction until it prints its success message. |
+
+Initialization removes state automatically only when it fails before invoking Vagrant.
+After Vagrant is invoked, `.vagrant/dac-vm.json` is deliberately retained so the normal
+destroy path still knows the sealed target. Never delete `.vagrant` manually. If state was
+lost or corrupted while a domain may remain, revoke the target key and have the physical-
+host virtualization administrator reconcile the Vagrant and libvirt state before further
+use.
+
+The sealed guest cannot update Debian, Python dependencies, or packs. Package-install and
+registry failures inside it are expected; destroy and rebuild from a reviewed commit and
+lock files instead. Never use a snapshot containing credentials or evidence as a repair
+or upgrade mechanism.
+
 ## Exit-code decision table
 
 | Exit | Condition | Response |

@@ -41,6 +41,37 @@ flowchart LR
 The SSH branch ends at evidence acquisition. Detection Pack scripts are never copied
 to or executed on the target.
 
+## Optional controller VM boundary
+
+The hardened operational profile places the complete controller in a disposable
+KVM/libvirt guest. Vagrant runs on the physical host only to create, provision, connect
+to, and destroy that guest.
+
+```mermaid
+flowchart LR
+    subgraph Host["Physical host"]
+        Lifecycle["Vagrant lifecycle"]
+        Exported["Explicit JSON/Markdown exports"]
+    end
+    subgraph VM["Disposable controller VM"]
+        Core["Detection Goggles"]
+        Ansible["Ansible + per-VM key"]
+        GuestData["Evidence and reports"]
+    end
+    Target["Allowlisted SSH target"]
+    Lifecycle -->|"one-way committed archive"| Core
+    Core --> GuestData
+    Ansible -->|"only allowed egress"| Target
+    GuestData -->|"descriptor-checked report pull"| Exported
+```
+
+There is no synchronized host folder, bridged interface, forwarded host SSH agent, or
+raw-evidence export. Application code is root-owned in the guest; an unprivileged user
+runs Ansible and detectors. The VM boundary reduces controller-host exposure but does
+not turn Detection Pack subprocesses into a secure sandbox or protect against a
+hypervisor or physical-host compromise. The complete lifecycle is specified in the
+[disposable Vagrant controller playbook](operations/vagrant-controller.md).
+
 ## Repository and distribution boundaries
 
 ```mermaid
@@ -182,9 +213,10 @@ sequenceDiagram
 
 The inventory contains host, port, user, and optional host-key arguments, but no
 password. `--ask-pass` and `--ask-become-pass` delegate interactive prompting to
-Ansible. The Ansible environment is allowlisted, while `SSH_AUTH_SOCK` is forwarded so
-an existing agent can be used. Host-key checking is strict unless the operator selects
-`accept-new`.
+Ansible. The Ansible environment is allowlisted, while the controller process's
+`SSH_AUTH_SOCK` is passed to Ansible. Under the disposable VM profile, the physical
+host's agent is blocked at the VM boundary; only a guest-local agent and per-VM key can
+supply this socket. Host-key checking is strict unless the operator selects `accept-new`.
 
 The playbook uses only fully qualified `ansible.builtin.stat`, `copy`, `set_fact`, and
 `fetch` actions. Final-component links are not followed. Remote metadata is used to

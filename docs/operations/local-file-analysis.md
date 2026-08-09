@@ -13,6 +13,10 @@ files without executing or modifying the originals.
 - The operator has chosen whether raw evidence may be retained.
 - The output filesystem has enough free space.
 
+Under the disposable Vagrant profile, local means guest-local. Place or acquire evidence
+inside `/var/lib/detection-goggles/evidence`; the profile intentionally provides no host
+shared folder or raw-artifact upload/export command.
+
 ## Input selection
 
 Prefer explicit file paths. Record the supplied paths and, when chain-of-custody matters,

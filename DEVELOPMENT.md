@@ -59,6 +59,42 @@ dacctl pack build htb-malevolent-modmaker --output dist
   src/detection_goggles/ansible/fetch_files.yml
 ```
 
+Changes to the disposable controller profile additionally require:
+
+```bash
+bash -n scripts/vm-* vm/guest/dac-key-init vm/provision/bootstrap.sh
+sh -n vm/guest/dacctl
+shellcheck scripts/vm-* vm/guest/dac-key-init vm/guest/dacctl \
+  vm/provision/bootstrap.sh
+ruby -c Vagrantfile
+```
+
+On Debian 12 amd64 with CPython 3.11, verify the committed lock files with:
+
+```bash
+scripts/vm-locks check
+```
+
+When dependency ranges or pins intentionally change, regenerate both environments from
+canonical PyPI, review every version and digest, and recheck the result:
+
+```bash
+scripts/vm-locks update
+git diff -- requirements/vm.lock requirements/vm-runtime.lock
+scripts/vm-locks check
+```
+
+The runtime lock must remain a strict subset without build, pytest, Ruff, or setuptools.
+Hash agreement proves consistency with the selected wheel; it is not a trust decision.
+
+Before release, complete the initialization, verification, allowed/denied network,
+synthetic acquisition, report rejection/export, reboot, destruction, and key-revocation
+procedure in the
+[physical-host release validation](docs/operations/vagrant-controller.md#physical-host-release-validation)
+section. Use a clean bare-metal Debian 12 amd64 KVM/libvirt host. A container or nested-VM
+run cannot validate the hypervisor, management network, mount isolation, nftables, or
+destruction behavior.
+
 Any change to a core contract requires all pack tests to be run. A pack release receives
 an independent semantic version and immutable archive; changing pack behavior requires
 an appropriate version increment. Before publishing, build twice, compare the archives

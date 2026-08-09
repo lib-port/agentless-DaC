@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly CONFIG_FILE=/etc/detection-goggles/controller.conf
+readonly KEY_FILE="${HOME}/.ssh/dac_target_ed25519"
+readonly KNOWN_HOSTS_FILE="${HOME}/.ssh/known_hosts"
+
+fail() {
+  printf 'dac-key-init: %s\n' "$*" >&2
+  exit 1
+}
+
+[[ "$(id -un)" == dac ]] || fail "run this command as the dac user"
+[[ -r "$CONFIG_FILE" ]] || fail "controller configuration is missing"
+
+# The file is root-owned and values were validated before it was written.
+# shellcheck source=/dev/null
+source "$CONFIG_FILE"
+
+[[ "$DAC_TARGET_IP" =~ ^[0-9.]+$ ]] || fail "configured target address is invalid"
+[[ "$DAC_TARGET_PORT" =~ ^[0-9]+$ ]] || fail "configured target port is invalid"
+[[ "$DAC_TARGET_HOST_KEY" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]] || \
+  fail "configured target fingerprint is invalid"
+
+umask 077
+mkdir -p -- "${HOME}/.ssh"
+chmod 0700 "${HOME}/.ssh"
+
+scan_file="$(mktemp "${HOME}/.ssh/host-scan.XXXXXX")"
+one_key_file="$(mktemp "${HOME}/.ssh/host-key.XXXXXX")"
+matched_key_file="$(mktemp "${HOME}/.ssh/matched-key.XXXXXX")"
+cleanup() {
+  rm -f -- "$scan_file" "$one_key_file" "$matched_key_file"
+}
+trap cleanup EXIT
+
+ssh-keyscan -T 10 -p "$DAC_TARGET_PORT" "$DAC_TARGET_IP" >"$scan_file" 2>/dev/null || \
+  fail "could not retrieve the target host key"
+
+matched=false
+while IFS= read -r key_line; do
+  [[ -n "$key_line" && "$key_line" != \#* ]] || continue
+  printf '%s\n' "$key_line" >"$one_key_file"
+  actual_fingerprint="$(ssh-keygen -E sha256 -lf "$one_key_file" | awk '{print $2}')"
+  if [[ "$actual_fingerprint" == "$DAC_TARGET_HOST_KEY" ]]; then
+    printf '%s\n' "$key_line" >"$matched_key_file"
+    matched=true
+    break
+  fi
+done <"$scan_file"
+
+[[ "$matched" == true ]] || fail "target host key did not match the out-of-band fingerprint"
+touch "$KNOWN_HOSTS_FILE"
+chmod 0600 "$KNOWN_HOSTS_FILE"
+ssh-keygen -R "[$DAC_TARGET_IP]:$DAC_TARGET_PORT" -f "$KNOWN_HOSTS_FILE" >/dev/null 2>&1 || true
+cat "$matched_key_file" >>"$KNOWN_HOSTS_FILE"
+
+if [[ -f "$KEY_FILE" && ! -L "$KEY_FILE" && -f "${KEY_FILE}.pub" && ! -L "${KEY_FILE}.pub" ]]; then
+  if ssh-keygen -y -P '' -f "$KEY_FILE" >/dev/null 2>&1; then
+    fail "the existing private key is not encrypted; destroy this controller VM"
+  fi
+  printf '%s\n' "A per-VM target key already exists: ${KEY_FILE}.pub"
+  cat "${KEY_FILE}.pub"
+  exit 0
+fi
+if [[ -e "$KEY_FILE" || -e "${KEY_FILE}.pub" ]]; then
+  fail "partial or unsafe key state exists; destroy this controller VM"
+fi
+
+controller_id="$(cut -c 1-12 /etc/machine-id)"
+printf '%s\n' \
+  "Create a non-empty passphrase for this disposable controller key." \
+  "The private key will never leave the VM."
+ssh-keygen -t ed25519 -a 100 -f "$KEY_FILE" -C "dac-controller-${controller_id}"
+
+if ssh-keygen -y -P '' -f "$KEY_FILE" >/dev/null 2>&1; then
+  shred -u -- "$KEY_FILE" "${KEY_FILE}.pub"
+  fail "an empty passphrase is not permitted; destroy this controller VM"
+fi
+
+chmod 0600 "$KEY_FILE"
+chmod 0644 "${KEY_FILE}.pub"
+printf '%s\n' \
+  "Register this public key on the dedicated target account:" \
+  ""
+cat "${KEY_FILE}.pub"
+printf '%s\n' \
+  "" \
+  "For each controller session, start a guest-local agent and load the key:" \
+  "  eval \"\$(ssh-agent -s)\"" \
+  "  ssh-add ${KEY_FILE}"

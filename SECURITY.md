@@ -65,3 +65,17 @@ small, non-executable synthetic byte sequences and reserved domains.
 Analyze challenge files only on systems and data you are authorized to use. Prefer an
 isolated malware-analysis virtual machine even though Detection Goggles performs static
 analysis only.
+
+The repository includes an operational
+[Vagrant controller profile](docs/operations/vagrant-controller.md) that disables shared
+folders and host-agent forwarding, runs as an unprivileged guest user, restricts network
+egress to one declared SSH target, and exports only selected reports. This is defense in
+depth rather than a warranty or secure sandbox. The Vagrantfile and provisioners execute
+as trusted host/guest control code and must be reviewed before use; hypervisor escapes,
+host compromise, and malicious target behavior remain outside this boundary.
+
+The supported physical-host baseline is Debian 12 amd64 with exact Vagrant and provider
+versions recorded in the playbook. Other hosts, architectures, tool versions, and nested
+virtualization are outside the validated profile. Changing the target or any trusted
+software component requires destroying and rebuilding the guest; it is not upgraded in
+place.

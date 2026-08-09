@@ -9,6 +9,7 @@ The project does not accept external contributions or security reports.
 | Operation | Use when | Playbook |
 | --- | --- | --- |
 | Prepare a controller | Installing the core or a pack on a new system | [Controller setup](controller-setup.md) |
+| Isolate a controller VM | Running operational analysis away from the physical host | [Disposable Vagrant controller](vagrant-controller.md) |
 | Analyze local artifacts | Challenge files are already on the controller | [Local file analysis](local-file-analysis.md) |
 | Acquire named remote files | Authorized files reside on a POSIX SSH host | [SSH acquisition](ssh-acquisition.md) |
 | Preserve or rerun evidence | A run must be reproducible without the original source | [Evidence retention and replay](evidence-replay.md) |
