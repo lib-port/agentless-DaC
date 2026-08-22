@@ -1,0 +1,64 @@
+name: Cleanup workflow runs
+
+on:
+  workflow_run:
+    workflows:
+      - Mirror to GitLab
+      - Dependabot Updates
+    types:
+      - completed
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+concurrency:
+  group: cleanup-workflow-runs
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Retain only newest completed run per workflow
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cleanup_workflow_id="$(
+            gh api \
+              "repos/${GH_REPO}/actions/workflows/cleanup-workflow-runs.yml" \
+              --jq '.id'
+          )"
+
+          mapfile -t workflow_ids < <(
+            gh api --paginate \
+              "repos/${GH_REPO}/actions/workflows?per_page=100" \
+              --jq '.workflows[] | select(.state == "active") | .id'
+          )
+
+          for workflow_id in "${workflow_ids[@]}"; do
+            mapfile -t completed_run_ids < <(
+              gh api --paginate \
+                "repos/${GH_REPO}/actions/workflows/${workflow_id}/runs?status=completed&per_page=100" \
+                --jq '.workflow_runs[] | [.created_at, .id] | @tsv' |
+                sort --reverse |
+                cut --fields=2
+            )
+
+            if [[ "${workflow_id}" == "${cleanup_workflow_id}" ]]; then
+              stale_run_ids=("${completed_run_ids[@]}")
+            else
+              stale_run_ids=("${completed_run_ids[@]:1}")
+            fi
+
+            for run_id in "${stale_run_ids[@]}"; do
+              echo "Deleting workflow ${workflow_id} run ${run_id}"
+              gh api --method DELETE \
+                "repos/${GH_REPO}/actions/runs/${run_id}"
+            done
+          done
