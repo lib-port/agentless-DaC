@@ -211,11 +211,13 @@ dacctl pack verify ./htb-malevolent-modmaker-0.1.1.tar.gz \
   --registry ./registry/packs.yml
 ```
 
-GitHub Actions are not used by this repository. Pack releases are prepared manually:
-the maintainer runs the validation commands below, builds the archive twice to confirm
-reproducibility, verifies its SHA-256 against `registry/packs.yml`, and then uploads the
-archive and checksum to the matching GitHub release. Pack code is executable code, so
-only install artifacts from a source you trust and always verify the published digest.
+GitHub Actions do not validate, build, or publish packs. The configured workflows mirror
+`main` to GitLab and retain only the latest completed run for each workflow. Pack releases
+are prepared manually: the maintainer runs the validation commands below, builds the
+archive twice to confirm reproducibility, verifies its SHA-256 against
+`registry/packs.yml`, and then uploads the archive and checksum to the matching GitHub
+release. Pack code is executable code, so only install artifacts from a source you trust
+and always verify the published digest.
 
 ## Malevolent ModMaker detections
 
