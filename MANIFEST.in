@@ -4,6 +4,10 @@ include SECURITY.md
 include DEVELOPMENT.md
 recursive-include docs *.md
 recursive-include registry *.yml
+recursive-include containers *
+recursive-include requirements *.lock
+include scripts/container-*
+include scripts/container_locks.py
 prune packs
 prune tests
 global-exclude *.py[cod]

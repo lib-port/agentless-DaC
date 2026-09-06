@@ -4,78 +4,103 @@
 
 Security reporting is not supported for this project. There is no vulnerability-report
 intake, private disclosure channel, coordinated-disclosure process, response-time
-commitment, or supported-version matrix. Do not submit suspected vulnerabilities by
-issue, pull request, email, GitHub private reporting, or any other channel. Never send
-the maintainer live malware, credentials, flags, decrypted victim content, or sensitive
+commitment or supported-version matrix. Do not submit suspected vulnerabilities by
+issue, pull request, email, GitHub private reporting or any other channel. Never send
+the maintainer live malware, credentials, flags, decrypted victim content or sensitive
 evidence.
 
-Users are responsible for evaluating the software, its dependencies, Detection Packs,
-and their operating environment before use. Security-related changes may be made at the
-maintainer's discretion, but no review, fix, notification, or release is promised. The
-rest of this document describes known boundaries; it is not a warranty or support
-commitment.
+Users are responsible for evaluating the software, dependencies, Detection Packs and
+operating environment before use. Security-related changes may be made at the
+maintainer's discretion, but no review, fix, notification or release is promised. This
+document describes operational boundaries; it is not a warranty or support commitment.
 
-## Threat model
+## Execution boundary
 
-Detection Packs contain Python and therefore contain executable code. A detector
-subprocess limits crashes, runtime, file descriptors, memory, and output, but it is not
-an operating-system security boundary. In v0.1, only repository-reviewed first-party
-packs are trusted. Do not run an unreviewed pack merely because its manifest says
-`first_party: true`.
+Detection Packs contain executable Python. Only reviewed, trusted first-party packs
+are intended for use. A manifest's `first_party: true` field is not a trust decision.
+The launcher requires rootless Podman for every detector run, including tests, and
+does not fall back to native execution when runtime verification fails.
 
-The core deliberately:
+Disposable analysis workloads use a read-only image, an unprivileged account, bounded
+resources, no external network and no target credentials. They receive selected
+evidence through managed storage and use the selected pack from the image, managed
+storage or an explicitly selected read-only pack input. The operator's home, SSH
+directory, full checkout and container-engine socket are not workload mounts.
+Detector subprocess limits remain useful within that boundary.
 
-- never executes an input artifact;
-- snapshots regular files through an already-open descriptor;
-- rejects final-component symbolic links by default;
-- verifies retained artifacts against their recorded size and SHA-256;
-- runs detectors without the caller's environment variables;
-- gives each detector a private working and temporary directory;
-- invokes Python directly without a shell;
-- validates and size-limits detector output;
-- deletes raw snapshots unless retention is explicitly requested;
-- creates evidence and report files with owner-only permissions.
+CPU, memory, process and scratch-space limits do not guarantee host availability.
+Managed named volumes have no hard disk quota: evidence size checks and normal cleanup
+do not prevent hostile code from exhausting host storage. Monitor free space and remove
+retained state deliberately; unreviewed packs remain out of scope.
 
-For SSH acquisition, the core additionally:
+Rootless containers share the host kernel. They do not provide a separate guest kernel
+or protection equivalent to a virtual machine. Kernel, Podman, OCI runtime and network
+backend vulnerabilities can defeat the boundary. A compromised host or account can
+also access its rootless container storage. An already hostile pack remains an
+unacceptable dependency even if its execution is containerised.
 
-- creates an ephemeral inventory and never writes passwords into it;
-- accepts passwords only through Ansible's interactive prompt;
-- enforces host-key checking, with `accept-new` available only by explicit opt-in;
-- uses a core-owned playbook with fully qualified Ansible modules and no shell tasks;
-- inspects absolute paths on POSIX SSH targets without following final-component links
-  and fetches only named regular files;
-- applies configured per-file and aggregate byte limits before eligible transfers;
-- removes controller-side transport staging when the run finishes.
+The initial host integration target is native Linux amd64 with cgroup v2, initially
+Kali Linux and Podman 5.8.6. Real runtime, networking and cleanup checks must pass on
+the actual host before operational use. Static checks and mocked tests do not validate
+this boundary; see the [container playbook](docs/operations/containers.md).
 
-`--become` expands what the controller can read from the target and can make Ansible
-buffer a remote file while calculating its checksum. Use it only when necessary. A
-malicious or concurrently changing remote host can still race metadata inspection and
-transfer; the downloaded result is therefore snapshotted and hashed again before any
-detector sees it.
+## Evidence and reports
 
-Pack installation rejects absolute paths, traversal, links, devices, duplicate archive
-members, excessive file counts, and excessive expanded size.
+The core treats input artefacts as data and never executes them. It snapshots regular
+files through open descriptors, applies count and size limits, records SHA-256 hashes
+and rejects unexpected input types. Symbolic links are rejected by default; selecting
+a directory never grants access to a link destination outside that selection.
+
+Retained evidence is validated against its recorded size and hash, then re-snapshotted
+before replay. Runtime evidence and retained raw content use managed volumes. Reports
+export only validated JSON and Markdown through bounded, regular-file checks; raw
+evidence and private keys are not exported alongside them. Sensitive paths, host
+identifiers, hashes and detection details can still appear in reports.
+
+Temporary workloads and unretained evidence are cleaned up after use. Explicit target
+or evidence removal deletes the named managed storage; it does not guarantee secure
+erasure from the underlying filesystem, backups or snapshots. The project has no
+secure-delete or automatic retention scheduler.
+
+## SSH and credentials
+
+Target profiles pin a literal IPv4 address, SSH port and independently verified
+host-key fingerprint. Initialisation generates an encrypted target key in managed
+storage and prints only its public key. Existing private keys may be explicitly
+imported for a run. Broad SSH-directory mounts and host-agent forwarding are not part
+of the workflow; passwords are accepted only by interactive prompting.
+
+Every SSH operation uses a fresh rootless network namespace. A short-lived initialiser
+installs a default-deny nftables policy allowing the saved target and port before the
+acquisition worker starts. Its network-administration capability is confined to that
+namespace and is not granted to detection or acquisition workers. Host-key checking
+remains strict, and analysis runs separately with networking disabled and no keys.
+
+The core-owned Ansible playbook fetches only named absolute regular paths. It does not
+execute pack scripts or artefacts on the target. Ansible may stage its own transient
+modules remotely. A changing or malicious target can race metadata inspection and
+transfer, so controller-side limits and hashing are applied after transfer as well.
+`--become` expands accessible data and may cause Ansible to buffer remote content.
+
+Removing a local target profile does not revoke its public key on the remote host.
+The operator must remove that key from the target account separately.
+
+## Dependencies and packs
+
+The image configuration records immutable local IDs. Runtime operations do not silently
+replace those images. A deliberate rebuild is required for trusted code or dependency
+updates. Digest consistency establishes identity, not trust in the source or package.
+
+Registry downloads use a separate disposable workload with no evidence or credential
+mounts. Pack installation verifies digests and rejects unsafe archive paths, links,
+devices, duplicate members and excessive sizes or entry counts. Installed packs use
+managed storage; callers cannot redirect installation into arbitrary host directories.
+A compromised registry can still publish malicious content with matching metadata.
 
 ## Malware handling
 
 This repository must never contain live Hack The Box challenge binaries, malware,
-credentials, flags, decrypted victim content, or other restricted artifacts. Tests use
-small, non-executable synthetic byte sequences and reserved domains.
-
-Analyze challenge files only on systems and data you are authorized to use. Prefer an
-isolated malware-analysis virtual machine even though Detection Goggles performs static
-analysis only.
-
-The repository includes an operational
-[Vagrant controller profile](docs/operations/vagrant-controller.md) that disables shared
-folders and host-agent forwarding, runs as an unprivileged guest user, restricts network
-egress to one declared SSH target, and exports only selected reports. This is defense in
-depth rather than a warranty or secure sandbox. The Vagrantfile and provisioners execute
-as trusted host/guest control code and must be reviewed before use; hypervisor escapes,
-host compromise, and malicious target behavior remain outside this boundary.
-
-The supported physical-host baseline is Debian 12 amd64 with exact Vagrant and provider
-versions recorded in the playbook. Other hosts, architectures, tool versions, and nested
-virtualization are outside the validated profile. Changing the target or any trusted
-software component requires destroying and rebuilding the guest; it is not upgraded in
-place.
+credentials, flags, decrypted victim content or other restricted artefacts. Tests use
+small synthetic byte sequences and reserved domains. Analyse only systems and data you
+are authorised to use. Reports and retained evidence must follow the operator's own
+storage, access-control and disposal procedures.

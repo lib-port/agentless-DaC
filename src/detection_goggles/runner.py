@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from detection_goggles.engine import DEFAULT_TIMEOUT_SECONDS, evaluate
-from detection_goggles.errors import AcquisitionError
+from detection_goggles.errors import AcquisitionError, DacError
 from detection_goggles.evidence import (
     DEFAULT_MAX_FILE_SIZE,
     DEFAULT_MAX_FILES,
@@ -23,7 +23,8 @@ from detection_goggles.evidence import (
 from detection_goggles.models import DetectionRun, Pack
 from detection_goggles.packs import ensure_source_supported
 from detection_goggles.reporting import build_report, write_report
-from detection_goggles.ssh_source import SshEvidenceWorkspace, SshOptions
+from detection_goggles.runtime_guard import require_container
+from detection_goggles.ssh_source import SshOptions
 
 
 @dataclass(frozen=True)
@@ -58,6 +59,7 @@ def run_files(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     retain_evidence: bool = False,
 ) -> CompletedRun:
+    require_container("analyse", "test")
     ensure_source_supported(pack, "files")
     with LocalEvidenceWorkspace(
         paths,
@@ -93,28 +95,12 @@ def run_ssh(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     retain_evidence: bool = False,
 ) -> CompletedRun:
-    """Acquire named files over SSH and evaluate them only on the controller."""
+    """Reject the former combined network-acquisition and detection API."""
 
-    ensure_source_supported(pack, "ssh")
-    with SshEvidenceWorkspace(
-        tuple(remote_paths),
-        options,
-        max_file_size=max_file_size,
-        max_total_size=max_total_size,
-        max_files=max_files,
-    ) as bundle:
-        if not bundle.manifest["artifacts"]:
-            raise AcquisitionError("No regular remote file artifacts were acquired")
-        detection_run = evaluate(pack, bundle, timeout_cap=timeout_seconds)
-        report = build_report(pack, bundle, detection_run)
-        report_directory = write_report(
-            report,
-            output_root,
-            formats=pack.manifest["reporting"]["formats"],
-            bundle=bundle,
-            retain=retain_evidence,
-        )
-    return CompletedRun(report, report_directory, detection_run)
+    raise DacError(
+        "SSH acquisition and detection require separate Podman roles; "
+        "use `dacctl run ssh` through the host launcher"
+    )
 
 
 def run_evidence(
@@ -128,6 +114,7 @@ def run_evidence(
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
     retain_evidence: bool = False,
 ) -> CompletedRun:
+    require_container("analyse", "test")
     ensure_source_supported(pack, "evidence")
     bundle = load_evidence_bundle(
         evidence_path,

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+export PYTHONPATH="${SCRIPT_DIR}/../src"
+exec python3 "${SCRIPT_DIR}/../containers/check.py" verify "$@"

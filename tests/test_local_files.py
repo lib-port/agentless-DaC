@@ -13,6 +13,8 @@ from detection_goggles.packs import default_pack_roots, resolve_pack
 from detection_goggles.runner import run_evidence, run_files
 from tests.helpers import malevolent_profile_files
 
+pytestmark = pytest.mark.container
+
 
 @pytest.fixture
 def pack():
@@ -137,8 +139,13 @@ def test_replay_rejects_actual_size_mismatch_before_reading(
     manifest["artifacts"][0]["size"] = 1
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
-    def unexpected_read(*args: object, **kwargs: object) -> bytes:
-        pytest.fail("artifact content was read after the size mismatch")
+    original_read = evidence_module.os.read
+    artifact_path = evidence / manifest["artifacts"][0]["content_ref"]
+
+    def unexpected_read(descriptor: int, size: int) -> bytes:
+        if Path(f"/proc/self/fd/{descriptor}").resolve() == artifact_path.resolve():
+            pytest.fail("artifact content was read after the size mismatch")
+        return original_read(descriptor, size)
 
     monkeypatch.setattr(evidence_module.os, "read", unexpected_read)
     with pytest.raises(ContractError, match="integrity check failed"):

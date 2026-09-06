@@ -5,24 +5,24 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 readonly SCRIPT_DIR
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd -P)"
 readonly PROJECT_ROOT
-readonly VALIDATION_LOCK="${PROJECT_ROOT}/requirements/vm.lock"
-readonly RUNTIME_LOCK="${PROJECT_ROOT}/requirements/vm-runtime.lock"
+readonly VALIDATION_LOCK="${PROJECT_ROOT}/requirements/container.lock"
+readonly RUNTIME_LOCK="${PROJECT_ROOT}/requirements/container-runtime.lock"
 readonly PYPI_INDEX="https://pypi.org/simple"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/vm-locks check|update
+Usage: scripts/container-locks check|update
 
   check   install and validate the committed hash-pinned environments
   update  resolve current wheels from canonical PyPI, validate them, and
-          atomically replace each VM lock file
+          atomically replace each container lock file
 
-Run only with CPython 3.11 on x86_64 Linux, matching the controller guest.
+Run only with CPython 3.11 on x86_64 Linux, matching the container image.
 EOF
 }
 
 fail() {
-  printf 'vm-locks: %s\n' "$*" >&2
+  printf 'container-locks: %s\n' "$*" >&2
   exit 1
 }
 
@@ -58,7 +58,7 @@ publish_dir=""
 cleanup() {
   rm -rf -- "$work_dir"
   if [[ -n "$publish_dir" && -d "$publish_dir" ]]; then
-    rm -f -- "$publish_dir/vm.lock" "$publish_dir/vm-runtime.lock"
+    rm -f -- "$publish_dir/container.lock" "$publish_dir/container-runtime.lock"
     rmdir -- "$publish_dir" 2>/dev/null || true
   fi
 }
@@ -72,7 +72,7 @@ resolve_lock() {
   local -a roots
 
   mkdir -m 0700 -- "$wheel_dir"
-  roots_output="$(python3 "${SCRIPT_DIR}/vm_locks.py" \
+  roots_output="$(python3 "${SCRIPT_DIR}/container_locks.py" \
     roots "$PROJECT_ROOT/pyproject.toml" "$profile")" || \
     fail "could not read dependency roots from pyproject.toml"
   mapfile -t roots <<<"$roots_output"
@@ -86,13 +86,13 @@ resolve_lock() {
     --dest "$wheel_dir" \
     "${roots[@]}"
 
-  python3 "${SCRIPT_DIR}/vm_locks.py" generate "$wheel_dir" "$output" "$profile" || \
+  python3 "${SCRIPT_DIR}/container_locks.py" generate "$wheel_dir" "$output" "$profile" || \
     fail "resolved ${profile} wheels could not be locked"
 }
 
 validate_lock_contract() {
-  python3 "${SCRIPT_DIR}/vm_locks.py" validate "$1" "$2" || \
-    fail "VM lock-file contract validation failed"
+  python3 "${SCRIPT_DIR}/container_locks.py" validate "$1" "$2" || \
+    fail "container lock-file contract validation failed"
 }
 
 install_and_check_locks() {
@@ -105,7 +105,7 @@ install_and_check_locks() {
   local project_wheel
 
   validate_lock_contract "$validation_lock" "$runtime_lock"
-  python3 "${SCRIPT_DIR}/vm_locks.py" copy-source "$PROJECT_ROOT" "$project_source" || \
+  python3 "${SCRIPT_DIR}/container_locks.py" copy-source "$PROJECT_ROOT" "$project_source" || \
     fail "project build inputs could not be staged safely"
   python3 -m venv "$validation_venv"
   "$validation_venv/bin/python" -m pip --isolated --disable-pip-version-check \
@@ -143,23 +143,23 @@ install_and_check_locks() {
 
 if [[ "$action" == check ]]; then
   install_and_check_locks "$VALIDATION_LOCK" "$RUNTIME_LOCK"
-  printf '%s\n' 'Both VM lock files are complete, hash-valid, and installable.'
+  printf '%s\n' 'Both container lock files are complete, hash-valid, and installable.'
   exit 0
 fi
 
-generated_validation="${work_dir}/vm.lock"
-generated_runtime="${work_dir}/vm-runtime.lock"
+generated_validation="${work_dir}/container.lock"
+generated_runtime="${work_dir}/container-runtime.lock"
 readonly generated_validation generated_runtime
 resolve_lock validation "$generated_validation"
 resolve_lock runtime "$generated_runtime"
 install_and_check_locks "$generated_validation" "$generated_runtime"
-publish_dir="$(mktemp -d "${PROJECT_ROOT}/requirements/.vm-locks.XXXXXX")"
-install -m 0644 -- "$generated_validation" "$publish_dir/vm.lock"
-install -m 0644 -- "$generated_runtime" "$publish_dir/vm-runtime.lock"
-mv --force --no-target-directory -- "$publish_dir/vm.lock" "$VALIDATION_LOCK"
-mv --force --no-target-directory -- "$publish_dir/vm-runtime.lock" "$RUNTIME_LOCK"
+publish_dir="$(mktemp -d "${PROJECT_ROOT}/requirements/.container-locks.XXXXXX")"
+install -m 0644 -- "$generated_validation" "$publish_dir/container.lock"
+install -m 0644 -- "$generated_runtime" "$publish_dir/container-runtime.lock"
+mv --force --no-target-directory -- "$publish_dir/container.lock" "$VALIDATION_LOCK"
+mv --force --no-target-directory -- "$publish_dir/container-runtime.lock" "$RUNTIME_LOCK"
 rmdir -- "$publish_dir"
 publish_dir=""
 printf '%s\n' \
-  'Updated requirements/vm.lock and requirements/vm-runtime.lock.' \
+  'Updated requirements/container.lock and requirements/container-runtime.lock.' \
   'Review every version and digest change before committing.'

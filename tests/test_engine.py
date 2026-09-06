@@ -3,9 +3,13 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
+import pytest
+
 from detection_goggles.models import Pack, Rule
 from detection_goggles.packs import default_pack_roots, resolve_pack
 from detection_goggles.runner import run_files
+
+pytestmark = pytest.mark.container
 
 
 def _pack_with_script(tmp_path: Path, source: str) -> Pack:

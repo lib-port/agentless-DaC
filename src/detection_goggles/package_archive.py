@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 from detection_goggles.errors import ContractError
 from detection_goggles.models import Pack
 from detection_goggles.packs import load_pack, user_pack_root
+from detection_goggles.runtime_guard import require_container
 
 MAX_ARCHIVE_FILES = 5000
 MAX_ARCHIVE_EXPANDED_SIZE = 256 * 1024 * 1024
@@ -60,6 +61,7 @@ def _tar_info(name: str, *, directory: bool, size: int = 0) -> tarfile.TarInfo:
 
 
 def build_pack_archive(pack: Pack, output_directory: Path) -> tuple[Path, str]:
+    require_container("manage", "test")
     output_directory = output_directory.expanduser()
     if output_directory.is_symlink():
         raise ContractError(f"Output directory may not be a symbolic link: {output_directory}")
@@ -189,6 +191,7 @@ def install_pack_archive(
     expected_id: str | None = None,
     expected_version: str | None = None,
 ) -> Pack:
+    require_container("manage", "test")
     archive = archive.expanduser()
     if archive.is_symlink() or not archive.is_file():
         raise ContractError(f"Pack archive must be a regular, non-symlink file: {archive}")

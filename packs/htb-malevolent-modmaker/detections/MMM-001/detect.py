@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+from detection_goggles.runtime_guard import require_container
+
 
 def load_profiles():
     path = Path(__file__).resolve().parents[1] / "profiles.py"
@@ -17,6 +19,7 @@ def load_profiles():
 
 
 def main():
+    require_container("analyse", "test")
     profiles = load_profiles()
     request = json.load(sys.stdin)
     matches = []

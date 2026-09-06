@@ -1,6 +1,9 @@
 .codex/
 .venv/
+# Keep legacy VM state and local evidence private during migration.
 .vagrant/
+/evidence/
+/artifacts/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -9,4 +12,5 @@ __pycache__/
 build/
 dist/
 reports/
+.container-build/
 /AGENTS.md

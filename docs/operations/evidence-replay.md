@@ -2,12 +2,11 @@
 
 ## Objective
 
-Preserve controller-side file snapshots with integrity metadata and rerun detections
-without reading the original local path or reconnecting to the SSH target.
+Preserve acquired snapshots in managed storage and repeat detections without reading
+the original local source or reconnecting to the target. Replay always runs in the
+mandatory offline container workflow.
 
-## Retain evidence during acquisition
-
-Retention must be selected on the original run:
+## Retain the original acquisition
 
 ```bash
 dacctl run files htb-malevolent-modmaker \
@@ -16,114 +15,81 @@ dacctl run files htb-malevolent-modmaker \
   --output ./reports
 ```
 
-The equivalent option is available on `run ssh` and `run evidence`.
-
-The resulting layout is:
+The same retention option is available on SSH acquisition and replay. Host output
+contains only:
 
 ```text
 reports/<run-id>/
 ├── report.json
-├── report.md
-└── evidence/
-    ├── manifest.json
-    └── artifacts/
-        └── file-0001
+└── report.md
 ```
 
-The manifest records the original evidence run ID, source metadata, artifact IDs,
-display paths, sizes, SHA-256 digests, media types, modification times, and acquisition
+Raw snapshots remain in a project-managed volume. Host metadata under
+`${XDG_DATA_HOME:-~/.local/share}/detection-goggles/controller/evidence/`
+records the retained run's reference; it is not a raw evidence export.
+
+The managed bundle contains `manifest.json` and `artifacts/file-<number>` files.
+Its manifest records source information, the original evidence run ID, artefact IDs,
+display paths, sizes, SHA-256 digests, media types, modification times and acquisition
 issues.
 
-## Preserve the bundle
-
-Treat the entire report directory as one record. Before moving it, record independent
-checksums from inside the run directory:
+## List and replay a managed run
 
 ```bash
-sha256sum report.json report.md evidence/manifest.json evidence/artifacts/* \
-  > CHECKSUMS.sha256
-```
-
-Move or archive the report only through an approved evidence-handling process. Preserve
-owner-only access. A compressed archive does not add confidentiality; use storage-layer
-encryption when required.
-
-Do not rename files under `evidence/artifacts`, edit `manifest.json`, or replace links.
-Artifact names are contract references, not original filenames.
-
-## Replay procedure
-
-```bash
-RUN_ID="replace-with-original-run-id"
-dacctl run evidence htb-malevolent-modmaker \
-  "./reports/${RUN_ID}/evidence" \
+dacctl evidence list
+dacctl run evidence htb-malevolent-modmaker@0.1.2 \
+  --run-id RUN_ID \
   --output ./replay-reports
 ```
 
-Before detection, replay validates the manifest schema, resolves every content reference
-beneath the bundle root, rejects links, hashes every artifact, and compares both size and
-SHA-256. It enforces the normal 128 MiB per-file, 512 MiB total, and 1,000-file defaults
-before reading artifact content, with the same CLI limit options as other sources. It
-then copies the verified evidence into a new temporary snapshot and detects against that
-copy.
+Use the exact retained ID and pin the pack version when comparing rule behaviour.
+Replay validates schema, path containment, regular-file status, size and SHA-256,
+then creates a new snapshot for analysis. The retained source is not modified or
+executed. Normal count and byte limits apply before content is admitted.
 
-Use an exact pack version when reproducibility depends on rule implementation:
+A replay receives a new `run.id` while `run.evidence_run_id` refers to the original
+evidence. Compare pack versions, original evidence IDs, artefact hashes, evaluations,
+findings and acquisition issues. UUIDs and measured durations are run-specific and
+need not match. A changed pack version can produce a different result.
+
+Add `--retain-evidence` to preserve the new run's managed snapshot as well.
+
+## Import an existing bundle
+
+An explicitly selected Evidence Bundle v1 directory can be imported:
 
 ```bash
-RUN_ID="replace-with-original-run-id"
-dacctl run evidence htb-malevolent-modmaker@0.1.1 \
-  "./reports/${RUN_ID}/evidence" \
+dacctl run evidence htb-malevolent-modmaker@0.1.2 \
+  ./authorised-saved-bundle \
   --output ./replay-reports
 ```
 
-## Compare original and replay
+Provide either the bundle path or `--run-id`, not both. The importer validates the
+manifest and referenced artefacts, then copies only admitted content into managed
+storage. It does not give analysis a broad mount of the directory's parent.
 
-The replay report has a new `run.id` and retains the original bundle's ID in
-`run.evidence_run_id`. Compare:
+This path supports an existing authorised bundle, including one produced by an older
+checkout. The new retention workflow does not create host `reports/<id>/evidence`
+directories or offer ordinary raw-evidence export.
 
-- pack ID and version;
-- evidence run ID;
-- artifact IDs, sizes, and SHA-256 values;
-- evaluation status per rule and subject;
-- finding rule IDs and evidence;
-- acquisition issues.
+## Integrity failure
 
-Finding and evaluation UUIDs and measured durations are run-specific and need not be
-identical. A different pack version can legitimately produce different results.
+An integrity error means the content cannot be treated as the recorded bundle.
+Preserve its state according to local procedures, compare independent checksums or
+backups, and reacquire from the authorised source where possible. Do not edit hashes
+or paths simply to make replay succeed. Evidence reacquired from different bytes is a
+new acquisition.
 
-## Retain a replay snapshot
-
-To create a fresh retained copy beneath the replay report:
+## Remove retained evidence
 
 ```bash
-RUN_ID="replace-with-original-run-id"
-dacctl run evidence htb-malevolent-modmaker@0.1.1 \
-  "./reports/${RUN_ID}/evidence" \
-  --retain-evidence \
-  --output ./replay-reports
+dacctl evidence remove RUN_ID
 ```
 
-The source manifest remains unchanged; retention copies verified artifacts to the new
-run directory.
+Resolve the intended run with `evidence list` first. Removal deletes that run's managed
+state. It does not delete previously exported reports, independently imported source
+bundles, backups or snapshots, and it does not guarantee secure erasure.
 
-## Integrity failure response
-
-An integrity error means the retained directory cannot be treated as the manifest's
-recorded evidence. Do not bypass the check or rewrite hashes to make replay succeed.
-Instead:
-
-1. stop using the affected bundle;
-2. preserve its current state if local procedures require investigation;
-3. compare it with independently stored checksums or backups;
-4. reacquire from the authorized original source when possible;
-5. label any report based on different evidence as a new acquisition.
-
-## Completion criteria
-
-- The exact pack version used for replay is recorded.
-- Manifest and artifact integrity verification succeeded.
-- Original and replay run IDs are distinguishable.
-- Differences in evaluations or findings are explained.
-- Stored reports and raw snapshots remain access-controlled.
-- Disposal, when required, follows the operator's approved process; Detection Goggles
-  has no secure-delete or evidence-retention scheduler.
+The operator owns retention decisions. There is no automatic retention scheduler or
+secure-delete facility. Stored reports, managed volumes and their underlying rootless
+container storage must follow the operator's access-control and disposal procedures.

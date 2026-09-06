@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import ipaddress
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass
@@ -27,6 +32,7 @@ from detection_goggles.evidence import (
     replace_manifest,
     validate_acquisition_limits,
 )
+from detection_goggles.runtime_guard import require_container
 from detection_goggles.schema import validate
 
 MAX_REMOTE_PATH_LENGTH = 3500
@@ -47,6 +53,9 @@ class SshOptions:
     host_key_policy: str = "strict"
     connection_timeout: int = 30
     acquisition_timeout: int = 600
+    known_hosts: Path | None = None
+    fingerprint: str | None = None
+    agent_socket: str | None = None
 
 
 def _validate_host(value: str) -> str:
@@ -69,8 +78,8 @@ def _validate_options(options: SshOptions) -> SshOptions:
         raise ContractError("SSH user may contain only letters, numbers, dot, underscore, and dash")
     if not 1 <= options.port <= 65535:
         raise ContractError("SSH port must be between 1 and 65535")
-    if options.host_key_policy not in {"strict", "accept-new"}:
-        raise ContractError("SSH host-key policy must be 'strict' or 'accept-new'")
+    if options.host_key_policy != "strict":
+        raise ContractError("SSH acquisition requires a pinned target and strict host-key checking")
     if not 1 <= options.connection_timeout <= 300:
         raise ContractError("SSH connection timeout must be between 1 and 300 seconds")
     if not 1 <= options.acquisition_timeout <= 3600:
@@ -80,12 +89,63 @@ def _validate_options(options: SshOptions) -> SshOptions:
     if options.identity is not None:
         identity = options.identity.expanduser()
         try:
-            metadata = identity.stat()
+            metadata = identity.lstat()
         except OSError as exc:
             raise ContractError(f"Cannot access SSH identity file {identity}: {exc}") from exc
-        if not stat.S_ISREG(metadata.st_mode):
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
             raise ContractError(f"SSH identity must be a regular file: {identity}")
+    if options.agent_socket is not None:
+        socket = Path(options.agent_socket)
+        if (
+            not socket.is_absolute()
+            or not socket.is_relative_to("/run/dac-auth")
+            or socket.is_symlink()
+            or not stat.S_ISSOCK(socket.lstat().st_mode)
+        ):
+            raise ContractError("Only a temporary acquisition-local SSH agent is permitted")
     return options
+
+
+def _verify_pinned_target(options: SshOptions, policy: dict[str, Any]) -> None:
+    if policy["role"] == "test":
+        # Test workers have no non-loopback interface. They exercise transport mocks.
+        return
+    target = policy["target"]
+    if any(
+        target.get(name) != value
+        for name, value in (
+            ("host", options.host),
+            ("port", options.port),
+            ("fingerprint", options.fingerprint),
+        )
+    ):
+        raise ContractError("SSH options do not match the sealed target")
+    if options.known_hosts is None:
+        raise ContractError("SSH acquisition requires the target's pinned known-hosts file")
+    descriptor = os.open(options.known_hosts, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ContractError("Pinned known-hosts data must be one regular file")
+        raw = os.read(descriptor, 16 * 1024 + 1)
+        if len(raw) > 16 * 1024:
+            raise ContractError("Pinned known-hosts data exceeds its size limit")
+    finally:
+        os.close(descriptor)
+    lines = [line for line in raw.decode("ascii").splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise ContractError("Exactly one pinned SSH host key is required")
+    fields = lines[0].split()
+    expected_host = options.host if options.port == 22 else f"[{options.host}]:{options.port}"
+    if len(fields) != 3 or fields[0] != expected_host:
+        raise ContractError("Pinned SSH host key does not identify the selected target")
+    try:
+        encoded = base64.b64decode(fields[2], validate=True)
+    except ValueError as exc:
+        raise ContractError("Pinned SSH host key is not valid base64") from exc
+    actual = "SHA256:" + base64.b64encode(hashlib.sha256(encoded).digest()).decode().rstrip("=")
+    if not hmac.compare_digest(actual, str(options.fingerprint)):
+        raise ContractError("Pinned SSH host key fingerprint does not match the sealed target")
 
 
 def _validate_remote_paths(paths: tuple[str, ...], max_files: int) -> None:
@@ -120,7 +180,11 @@ def _write_private_json(path: Path, value: Any) -> None:
     _write_private(path, json.dumps(value, sort_keys=True, ensure_ascii=False) + "\n")
 
 
-def _ansible_environment(config: Path, local_tmp: Path) -> dict[str, str]:
+def _ansible_environment(
+    config: Path,
+    local_tmp: Path,
+    agent_socket: str | None = None,
+) -> dict[str, str]:
     environment = {
         "ANSIBLE_CONFIG": str(config),
         "ANSIBLE_HOST_KEY_CHECKING": "True",
@@ -131,9 +195,19 @@ def _ansible_environment(config: Path, local_tmp: Path) -> dict[str, str]:
         "PATH": os.environ.get("PATH", os.defpath),
         "PYTHONUNBUFFERED": "1",
     }
-    for name in ("LANG", "LC_ALL", "LOGNAME", "SSH_AUTH_SOCK", "TERM", "USER"):
+    for name in ("LANG", "LC_ALL", "LOGNAME", "TERM", "USER"):
         if os.environ.get(name):
             environment[name] = os.environ[name]
+    if agent_socket is not None:
+        socket = Path(agent_socket)
+        if (
+            not socket.is_absolute()
+            or not socket.is_relative_to("/run/dac-auth")
+            or socket.is_symlink()
+            or not stat.S_ISSOCK(socket.lstat().st_mode)
+        ):
+            raise ContractError("Unsafe acquisition-local SSH agent socket")
+        environment["SSH_AUTH_SOCK"] = agent_socket
     return environment
 
 
@@ -192,6 +266,7 @@ def _invoke_ansible(
     environment: dict[str, str],
     timeout_seconds: int,
 ) -> int:
+    require_container("acquire", "test")
     try:
         process = subprocess.Popen(
             command,
@@ -248,7 +323,9 @@ class SshEvidenceWorkspace(AbstractContextManager[EvidenceBundle]):
         self._stack: ExitStack | None = None
 
     def __enter__(self) -> EvidenceBundle:
+        policy = require_container("acquire", "test")
         _validate_options(self.options)
+        _verify_pinned_target(self.options, policy)
         _validate_remote_paths(self.paths, self.max_files)
         validate_acquisition_limits(
             max_file_size=self.max_file_size,
@@ -259,8 +336,7 @@ class SshEvidenceWorkspace(AbstractContextManager[EvidenceBundle]):
         executable = shutil.which("ansible-playbook")
         if executable is None:
             raise AcquisitionError(
-                "SSH acquisition requires ansible-playbook; install the optional dependency "
-                "with: pip install 'detection-goggles[ssh]'"
+                "The pinned runtime image lacks Ansible; rebuild with scripts/container-build"
             )
 
         stack = ExitStack()
@@ -284,9 +360,43 @@ class SshEvidenceWorkspace(AbstractContextManager[EvidenceBundle]):
                 "ansible_port": self.options.port,
                 "ansible_user": self.options.user,
             }
-            if self.options.host_key_policy == "accept-new":
-                host_variables["ansible_ssh_common_args"] = "-o StrictHostKeyChecking=accept-new"
-            inventory = {"all": {"hosts": {"dac_target": host_variables}}}
+            if self.options.known_hosts is not None:
+                host_variables["ansible_ssh_common_args"] = shlex.join(
+                    [
+                        "-F",
+                        "/dev/null",
+                        "-o",
+                        "StrictHostKeyChecking=yes",
+                        "-o",
+                        f"UserKnownHostsFile={self.options.known_hosts}",
+                        "-o",
+                        "GlobalKnownHostsFile=/dev/null",
+                        "-o",
+                        f"IdentityAgent={self.options.agent_socket or 'none'}",
+                        "-o",
+                        "IdentitiesOnly=yes",
+                        "-o",
+                        "ForwardAgent=no",
+                        "-o",
+                        "ProxyCommand=none",
+                        "-o",
+                        "ProxyJump=none",
+                    ]
+                )
+            inventory = {
+                "all": {
+                    "hosts": {
+                        "dac_target": host_variables,
+                        # Delegated copy tasks also use the shell plugin's remote_tmp.
+                        # Their destination is the container, whose home is read-only.
+                        "localhost": {
+                            "ansible_connection": "local",
+                            "ansible_python_interpreter": sys.executable,
+                            "ansible_remote_tmp": str(ansible_tmp),
+                        },
+                    }
+                }
+            }
             remote_files = [
                 {"id": f"remote-{index:04d}", "path": path}
                 for index, path in enumerate(self.paths, start=1)
@@ -337,7 +447,9 @@ class SshEvidenceWorkspace(AbstractContextManager[EvidenceBundle]):
             return_code = _invoke_ansible(
                 command,
                 cwd=temporary,
-                environment=_ansible_environment(config_path, ansible_tmp),
+                environment=_ansible_environment(
+                    config_path, ansible_tmp, self.options.agent_socket
+                ),
                 timeout_seconds=self.options.acquisition_timeout,
             )
             if return_code != 0:

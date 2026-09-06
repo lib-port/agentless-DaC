@@ -1,5 +1,5 @@
 # Hash-pinned Python 3.11 x86_64 Linux validation environment.
-# The permanent controller uses the smaller vm-runtime.lock environment.
+# The runtime image uses the smaller container-runtime.lock environment.
 ansible-core==2.19.11 \
     --hash=sha256:c39612b1f55a3321445a09eaee43f59ca6c849483792088a4767b97d8fe8580f
 attrs==26.1.0 \

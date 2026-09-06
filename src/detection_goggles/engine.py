@@ -17,6 +17,7 @@ from typing import Any
 from detection_goggles.errors import ContractError
 from detection_goggles.evidence import EvidenceBundle, new_run_id
 from detection_goggles.models import DetectionRun, Pack, Rule
+from detection_goggles.runtime_guard import require_container
 from detection_goggles.schema import validate
 
 ALLOWED_STATUSES = {"detected", "not_detected", "unknown", "not_applicable"}
@@ -92,6 +93,7 @@ def _run_subprocess(
     *,
     timeout_seconds: int,
 ) -> tuple[dict[str, Any], int]:
+    require_container("analyse", "test")
     started = time.monotonic()
     with tempfile.TemporaryDirectory(prefix="dac-detector-") as temporary:
         scratch = Path(temporary)
@@ -255,6 +257,7 @@ def evaluate(
     timeout_cap: int = DEFAULT_TIMEOUT_SECONDS,
     replay: bool = False,
 ) -> DetectionRun:
+    require_container("analyse", "test")
     if timeout_cap < 1:
         raise ContractError("Detector timeout cap must be positive")
     bundle.verify()

@@ -6,11 +6,29 @@ from pathlib import Path
 import pytest
 
 import detection_goggles.ssh_source as ssh_source
+from detection_goggles.engine import evaluate
 from detection_goggles.errors import AcquisitionError, ContractError
 from detection_goggles.packs import default_pack_roots, resolve_pack
-from detection_goggles.runner import run_ssh
-from detection_goggles.ssh_source import SshOptions
+from detection_goggles.reporting import build_report, write_report
+from detection_goggles.runner import CompletedRun, run_ssh
+from detection_goggles.ssh_source import SshEvidenceWorkspace, SshOptions
 from tests.helpers import malevolent_profile_files
+
+pytestmark = pytest.mark.container
+
+
+def _run_acquired(pack, paths, options, *, output_root, retain_evidence=False):
+    """Exercise mocked transport in an offline test worker, followed by the real engine."""
+    with SshEvidenceWorkspace(tuple(paths), options) as bundle:
+        run = evaluate(pack, bundle)
+        report = build_report(pack, bundle, run)
+        directory = write_report(
+            report,
+            output_root,
+            bundle=bundle,
+            retain=retain_evidence,
+        )
+        return CompletedRun(report, directory, run)
 
 
 @pytest.fixture
@@ -83,7 +101,7 @@ def test_ssh_fetches_named_files_then_detects_locally(
     captured: dict[str, object] = {}
     _fake_ansible(monkeypatch, remote_payloads, captured)
 
-    completed = run_ssh(
+    completed = _run_acquired(
         pack,
         remote_payloads,
         SshOptions(host="10.10.10.10", user="htb"),
@@ -115,6 +133,11 @@ def test_ssh_fetches_named_files_then_detects_locally(
     assert not any(name.startswith("ANSIBLE_PASSWORD") for name in environment)
     assert captured["command"].count("--timeout") == 1  # type: ignore[union-attr]
     assert captured["acquisition_timeout"] == 600
+    localhost = captured["inventory"]["all"]["hosts"]["localhost"]
+    assert localhost["ansible_connection"] == "local"
+    assert localhost["ansible_python_interpreter"] == ssh_source.sys.executable
+    assert localhost["ansible_remote_tmp"] == environment["ANSIBLE_LOCAL_TEMP"]
+    assert "ansible_remote_tmp" not in host_vars
 
 
 def test_ssh_missing_remote_file_makes_a_partial_run(
@@ -127,10 +150,10 @@ def test_ssh_missing_remote_file_makes_a_partial_run(
         captured,
     )
 
-    completed = run_ssh(
+    completed = _run_acquired(
         pack,
         ["/opt/lab/clean.txt", "/missing.bin"],
-        SshOptions(host="lab.example", user="analyst", host_key_policy="accept-new"),
+        SshOptions(host="lab.example", user="analyst"),
         output_root=tmp_path / "reports",
     )
 
@@ -143,16 +166,16 @@ def test_ssh_missing_remote_file_makes_a_partial_run(
         }
     ]
     host_vars = captured["inventory"]["all"]["hosts"]["dac_target"]  # type: ignore[index]
-    assert host_vars["ansible_ssh_common_args"] == "-o StrictHostKeyChecking=accept-new"
+    assert "ansible_ssh_common_args" not in host_vars
 
 
-def test_ssh_requires_optional_ansible_dependency(
+def test_ssh_requires_ansible_in_the_pinned_image(
     pack, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(ssh_source.shutil, "which", lambda _: None)
 
-    with pytest.raises(AcquisitionError, match="optional dependency"):
-        run_ssh(
+    with pytest.raises(AcquisitionError, match="pinned runtime image lacks Ansible"):
+        _run_acquired(
             pack,
             ["/opt/lab/sample.bin"],
             SshOptions(host="10.10.10.10", user="htb"),
@@ -162,7 +185,7 @@ def test_ssh_requires_optional_ansible_dependency(
 
 def test_ssh_rejects_relative_and_duplicate_paths(pack, tmp_path: Path) -> None:
     with pytest.raises(ContractError, match="absolute"):
-        run_ssh(
+        _run_acquired(
             pack,
             ["relative.bin"],
             SshOptions(host="10.10.10.10", user="htb"),
@@ -170,7 +193,7 @@ def test_ssh_rejects_relative_and_duplicate_paths(pack, tmp_path: Path) -> None:
         )
 
     with pytest.raises(ContractError, match="Duplicate"):
-        run_ssh(
+        _run_acquired(
             pack,
             ["/sample.bin", "/sample.bin"],
             SshOptions(host="10.10.10.10", user="htb"),
@@ -187,7 +210,7 @@ def test_failed_fetch_is_not_accepted_when_a_residual_file_exists(
         fetch_failures={"/opt/lab/changed.bin"},
     )
 
-    completed = run_ssh(
+    completed = _run_acquired(
         pack,
         ["/opt/lab/good.txt", "/opt/lab/changed.bin"],
         SshOptions(host="lab.example", user="analyst"),
@@ -241,3 +264,28 @@ def test_ansible_process_group_is_terminated_at_acquisition_timeout(
         )
 
     assert killed == [(process.pid, ssh_source.signal.SIGKILL)]
+
+
+def test_combined_ssh_runner_is_no_longer_an_execution_path(pack, tmp_path):
+    from detection_goggles.errors import DacError
+
+    with pytest.raises(DacError, match="separate Podman roles"):
+        run_ssh(
+            pack,
+            ["/sample.bin"],
+            SshOptions(host="10.10.10.10", user="htb"),
+            output_root=tmp_path,
+        )
+
+
+def test_caller_ssh_agent_is_not_inherited(monkeypatch, tmp_path):
+    monkeypatch.setenv("SSH_AUTH_SOCK", "/host/private-agent.sock")
+    environment = ssh_source._ansible_environment(tmp_path / "ansible.cfg", tmp_path)
+    assert "SSH_AUTH_SOCK" not in environment
+
+
+def test_accept_new_cannot_replace_a_pinned_target():
+    with pytest.raises(ContractError, match="pinned target"):
+        ssh_source._validate_options(
+            SshOptions(host="10.10.10.10", user="htb", host_key_policy="accept-new")
+        )

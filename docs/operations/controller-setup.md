@@ -2,156 +2,105 @@
 
 ## Objective
 
-Prepare an isolated controller with the Detection Goggles core and the one first-party
-Malevolent ModMaker Detection Pack.
+Prepare the host launcher and mandatory rootless Podman runtime. The initial
+integration target is native Linux amd64 with cgroup v2, initially Kali Linux with
+Podman 5.8.6. Containerised or nested development sessions can support some checks, but
+do not by themselves demonstrate the intended host boundary.
 
-This playbook installs directly into an already isolated controller. To create a
-disposable KVM guest on the supported bare-metal Debian 12 amd64 host, use the
-[Vagrant controller playbook](vagrant-controller.md) instead.
+## Host prerequisites
 
-## Preconditions
+Install Podman, its rootless networking/storage dependencies and Python 3.11 or newer
+through the host's trusted package manager. System package installation and subordinate
+UID/GID configuration may require an administrator. Run project commands as the
+ordinary operator account, never through `sudo podman`.
 
-- Python 3.11 or newer is installed.
-- The controller account owns a private working directory.
-- The repository checkout or a trusted core wheel is available.
-- If SSH acquisition is required, OpenSSH and Ansible can run on the controller.
-- The operator has read [SECURITY.md](../../SECURITY.md).
+Rootless execution requires usable subordinate UID/GID ranges and delegated cgroup v2
+CPU, memory and process controls. Verify the installed environment:
 
-## Procedure: source checkout
+```bash
+podman --version
+podman info --debug
+python3 --version
+```
 
-From the repository root:
+The currently selected integration baseline uses Podman 5.8.6, netavark 1.17.2 and
+crun 1.28. Record actual versions when validating another host. A version string alone
+does not establish that networking, storage or resource limits work.
+
+## Install the launcher
+
+From a trusted checkout:
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e '.[dev]'
+python -m pip install -e .
 ```
 
-For remote acquisition, install the optional SSH dependency as well:
+The host installation provides `dacctl` and orchestration dependencies. Ansible and
+detector execution belong in container images; installing Ansible on the host does not
+satisfy the runtime requirement.
+
+Inspect the trusted source and build the images:
 
 ```bash
-python -m pip install -e '.[dev,ssh]'
+scripts/container-build
+dacctl runtime doctor
+scripts/container-verify
 ```
 
-The source-tree pack is discoverable while the current directory is the repository.
-Confirm the installation:
+The build records immutable local runtime, network and test image IDs in
+`${XDG_CONFIG_HOME:-~/.config}/detection-goggles/images.json`. Runtime commands use
+those IDs without automatically pulling changed tags. Rebuild deliberately when the
+reviewed source or dependency set changes.
+
+## Confirm packs and validation
 
 ```bash
 dacctl --version
 dacctl pack list
 dacctl pack validate htb-malevolent-modmaker
+scripts/container-test
 ```
 
-Expected pack properties are version `0.1.1`, sources `files,evidence,ssh`, three rules,
-and `remote_execution: false`.
+The source pack is version `0.1.2`, declares `files,evidence,ssh`, contains three
+rules and sets `remote_execution: false`. The image contains the reviewed
+source pack from its build snapshot; source edits require a rebuild or an explicitly
+selected read-only pack input. Unrelated current directories are not searched.
 
-## Procedure: built core and local pack archive
+Installed packs use managed container storage. A local archive installation requires
+an explicit SHA-256; registry installation requires a published registry and matching
+immutable release asset. Follow the [pack lifecycle playbook](pack-lifecycle.md).
 
-Install a trusted core wheel into a clean virtual environment:
+## Storage and operating checks
 
-```bash
-python -m venv .venv
-. .venv/bin/activate
-python -m pip install ./detection_goggles-0.1.0-py3-none-any.whl
-```
+Host metadata lives under
+`${XDG_DATA_HOME:-~/.local/share}/detection-goggles/controller/`.
+Project-managed volumes hold installed packs, retained evidence and target credentials.
+Container storage belongs to the operator's rootless Podman account.
 
-Install Ansible support only if needed:
+Choose an owner-only host report directory with enough space. Selected local inputs
+are copied into managed storage; containers do not need the source parent directory,
+home directory or SSH directory mounted. Raw evidence stays in managed storage unless
+an existing external evidence bundle is explicitly supplied as an input.
 
-```bash
-python -m pip install './detection_goggles-0.1.0-py3-none-any.whl[ssh]'
-```
+Before handling real evidence, complete the [container validation procedure](containers.md).
+Confirm runtime prerequisites, image identities, allowed and denied network behaviour,
+offline analysis, credential separation, bounded export and cleanup. Record failures
+as incomplete validation.
 
-Local pack archives require an explicit SHA-256:
+## Target setup and retirement
 
-```bash
-dacctl pack install ./htb-malevolent-modmaker-0.1.1.tar.gz \
-  --sha256 79083d7e291a4687edae28c91df153c652772899c483a34bc91ee47eeb732e1b
-```
+Register a target using `dacctl target init` with its IPv4 address, port and
+independently verified fingerprint; see [SSH acquisition](ssh-acquisition.md).
+A generated private key stays encrypted in managed storage, and the printed public
+key must be registered on the intended remote account.
 
-Then confirm discovery from outside the source checkout:
+Use `dacctl target remove NAME` and `dacctl evidence remove RUN_ID` for explicitly
+selected managed state. Remove retired public keys from their target accounts
+separately. These operations do not guarantee secure erasure of backing storage.
 
-```bash
-dacctl pack list
-dacctl pack validate htb-malevolent-modmaker@0.1.1
-```
-
-## Procedure: registry installation after publication
-
-Registry operations need outbound HTTPS and require the registry plus matching immutable
-release asset to have been published. Before the first release, use the local archive
-procedure above. After publication, inspect the available identity and version:
-
-```bash
-dacctl pack available
-```
-
-Install by ID:
-
-```bash
-dacctl pack install htb-malevolent-modmaker
-```
-
-The client selects a core-compatible version, checks the downloaded SHA-256 against the
-registry, validates the extracted pack, and installs it under the per-user data
-directory. A digest match establishes consistency with the registry; it does not make
-pack code safe.
-
-For an offline registry copy:
-
-```bash
-dacctl pack available --registry ./registry/packs.yml
-dacctl pack verify ./htb-malevolent-modmaker-0.1.1.tar.gz \
-  --registry ./registry/packs.yml
-```
-
-## Optional pack roots
-
-Use a global CLI option when a pack is stored outside the default locations:
-
-```bash
-dacctl --pack-root /opt/detection-goggles/packs pack list
-dacctl --pack-root /opt/detection-goggles/packs \
-  run files htb-malevolent-modmaker ./sample.bin
-```
-
-For multiple persistent roots, set `DAC_PACK_PATH` to an operating-system path-separated
-list. Prefer `--pack-root` in recorded procedures because it makes the selected source
-explicit.
-
-## Controller preparation
-
-Create separate, owner-only locations for source artifacts and reports:
-
-```bash
-mkdir -m 700 evidence reports
-```
-
-Do not place the virtual environment, source artifacts, or reports in a shared or
-automatically synchronized directory. Ensure the filesystem has enough space for the
-configured acquisition limit plus reports and any retained evidence.
-
-For SSH runs, verify the actual Ansible executable and core playbook syntax:
-
-```bash
-ansible-playbook --version
-ansible-playbook --syntax-check -i 'dac_target,' \
-  src/detection_goggles/ansible/fetch_files.yml
-```
-
-## Verification checklist
-
-- `dacctl --version` reports the expected core version.
-- `dacctl pack validate` succeeds for the exact intended pack version.
-- `dacctl pack list` reports only expected paths, identities, and versions.
-- The report and evidence locations are owner-only.
-- Ansible is installed only when SSH acquisition is required.
-- No password, key content, malware, or sensitive evidence is stored in shell history or
-  project files.
-
-## Rollback and removal
-
-The CLI has no uninstall command. Installed packs are versioned, so an operator can
-select an older installed version explicitly with `pack-id@version`. Remove an installed
-version only after resolving its exact per-user path and confirming that no recorded
-procedure depends on it. Removal and secure disposal are operator-managed activities.
+The former Vagrant profile is not part of this runtime. Existing virtual machines,
+disks or credentials created by an earlier checkout are not migrated or destroyed
+automatically; retire them using the reviewed earlier lifecycle and revoke their
+remote keys before discarding that environment.

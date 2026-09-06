@@ -7,6 +7,8 @@ import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from detection_goggles.runtime_guard import require_container
+
 URL_PATTERN = re.compile(rb"https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{3,300}", re.IGNORECASE)
 
 
@@ -37,6 +39,7 @@ def safe_url(value):
 
 
 def main():
+    require_container("analyse", "test")
     profiles = load_profiles()
     request = json.load(sys.stdin)
     matches = []

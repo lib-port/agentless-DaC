@@ -21,14 +21,18 @@ from detection_goggles import __version__
 from detection_goggles.errors import ContractError, PackNotFoundError
 from detection_goggles.models import Pack
 from detection_goggles.package_archive import install_pack_archive
+from detection_goggles.runtime_guard import require_container
 from detection_goggles.schema import validate
 
-DEFAULT_REGISTRY = "https://raw.githubusercontent.com/libport/agentless-DaC/main/registry/packs.yml"
+DEFAULT_REGISTRY = (
+    "https://raw.githubusercontent.com/lib-port/agentless-DaC/main/registry/packs.yml"
+)
 MAX_REGISTRY_BYTES = 1024 * 1024
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 
 
 def _https_bytes(url: str, *, limit: int) -> bytes:
+    require_container("download")
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.netloc or parsed.username or parsed.password:
         raise ContractError(f"Registry network URLs must use credential-free HTTPS: {url}")
@@ -70,6 +74,7 @@ def _https_bytes(url: str, *, limit: int) -> bytes:
 
 
 def load_registry(source: str | Path = DEFAULT_REGISTRY) -> dict[str, Any]:
+    require_container("manage", "test")
     if isinstance(source, Path) or urlparse(str(source)).scheme == "":
         path = Path(source).expanduser()
         if path.is_symlink() or not path.is_file():
@@ -82,8 +87,9 @@ def load_registry(source: str | Path = DEFAULT_REGISTRY) -> dict[str, Any]:
             raise ContractError(f"Registry exceeds {MAX_REGISTRY_BYTES} bytes")
         label = str(path)
     else:
-        label = str(source)
-        raw = _https_bytes(label, limit=MAX_REGISTRY_BYTES)
+        raise ContractError(
+            "Registry downloads and parsing require separate Podman roles; use the host launcher"
+        )
     try:
         decoded = raw.decode("utf-8")
         if any(isinstance(token, AliasToken) for token in yaml.scan(decoded)):

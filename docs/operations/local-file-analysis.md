@@ -1,35 +1,20 @@
 # Playbook: local file analysis
 
-## Objective
+## Objective and prerequisites
 
-Run the Malevolent ModMaker detections against explicitly selected controller-local
-files without executing or modifying the originals.
+Analyse explicitly selected controller-local files using trusted static detections in
+a disposable offline container. The rootless runtime and pinned images must pass
+`dacctl runtime doctor`; follow [controller setup](controller-setup.md) first.
 
-## Preconditions
-
-- The core and pack pass the controller-setup verification.
-- Files were obtained through an authorized Hack The Box workflow.
-- Analysis occurs in an isolated malware-analysis environment.
-- The operator has chosen whether raw evidence may be retained.
-- The output filesystem has enough free space.
-
-Under the disposable Vagrant profile, local means guest-local. Place or acquire evidence
-inside `/var/lib/detection-goggles/evidence`; the profile intentionally provides no host
-shared folder or raw-artifact upload/export command.
-
-## Input selection
-
-Prefer explicit file paths. Record the supplied paths and, when chain-of-custody matters,
-record independent hashes before the run:
+Choose authorised inputs, an owner-only report location and whether raw evidence
+needs retention. Never execute a challenge binary to check whether it is valid.
+For an independent source record, calculate hashes before acquisition:
 
 ```bash
 sha256sum ./evidence/artifact-one ./evidence/artifact-two
 ```
 
-Do not open or execute challenge binaries to test whether they are valid. Detection
-Goggles reads their bytes as data.
-
-## Procedure: explicit files
+## Analyse explicit files
 
 ```bash
 dacctl run files htb-malevolent-modmaker \
@@ -38,11 +23,12 @@ dacctl run files htb-malevolent-modmaker \
   --output ./reports
 ```
 
-The source adapter opens each regular file, copies it into an owner-only temporary
-bundle, hashes it, checks for changes during the copy, runs detections against the
-snapshot, and removes that snapshot after reporting.
+The launcher admits only selected regular inputs and copies their bytes into managed
+storage. A container never receives a broad mount of the parent directory or operator
+home. Snapshot acquisition records hashes and detects changes during copying.
+The offline analysis workload receives no SSH keys and no external network.
 
-Record the CLI's exit code immediately in scripted operations:
+Capture the exit code immediately when scripting:
 
 ```bash
 dacctl run files htb-malevolent-modmaker ./evidence/artifact-one
@@ -50,52 +36,24 @@ result=$?
 printf 'dacctl exit code: %s\n' "$result"
 ```
 
-Interpret the code using the [standard outcome table](README.md#standard-command-outcome).
+Code `0` means complete with no detections, `1` means detections, and `2` means an
+incomplete run or operational error. A negative result does not establish safety.
 
-## Procedure: retain replayable evidence
+## Directory selection and limits
 
-Use retention only when raw snapshots are required:
-
-```bash
-dacctl run files htb-malevolent-modmaker \
-  ./evidence/artifact-one \
-  ./evidence/artifact-two \
-  --retain-evidence \
-  --output ./reports
-```
-
-Retention adds `evidence/manifest.json` and `evidence/artifacts/` beneath the report run
-directory. Treat the entire directory as sensitive. Continue with the
-[evidence-retention playbook](evidence-replay.md).
-
-## Procedure: directory recursion
-
-Directories are rejected unless recursion is explicitly enabled:
+Recursion requires an explicit option:
 
 ```bash
 dacctl run files htb-malevolent-modmaker ./evidence --recursive
 ```
 
-Recursive traversal sorts directory and file names for deterministic input ordering.
-It skips symbolic links by default and records each skip as an acquisition issue. A run
-with any acquisition issue returns exit code `2`, even if other files were evaluated.
+Traversal is deterministic. Links and non-regular input types are rejected by default;
+a selected directory cannot grant access through a link outside that selection.
+Acquisition issues make the result incomplete even if other files are analysed.
 
-Following links is a separate, high-risk choice:
-
-```bash
-dacctl run files htb-malevolent-modmaker ./evidence \
-  --recursive \
-  --follow-symlinks
-```
-
-Enable it only after resolving link targets and confirming that expansion cannot escape
-the intended dataset or create a directory cycle.
-
-## Resource limits
-
-Defaults are 128 MiB per file, 512 MiB total, 1,000 files, and a 10-second detector
-timeout cap. Hard ceilings are 1 GiB per file, 4 GiB total, and 5,000 files. Lower the
-operational limits when the expected dataset is smaller:
+Defaults are 128 MiB per file, 512 MiB total, 1,000 files and a 10-second detector
+timeout cap. Hard ceilings are 1 GiB per file, 4 GiB total and 5,000 files. For a small
+expected set:
 
 ```bash
 dacctl run files htb-malevolent-modmaker ./evidence \
@@ -106,39 +64,40 @@ dacctl run files htb-malevolent-modmaker ./evidence \
   --timeout 5
 ```
 
-Size values accept bytes or `KiB`, `MiB`, and `GiB`. The detector timeout must be from
-1 through 30 seconds. Hitting a file, byte, or count limit is an explicit acquisition
-issue, not a clean result.
+Size options accept bytes, `KiB`, `MiB` or `GiB`. The detector timeout is from 1 to
+30 seconds and remains subject to each rule's own limit. Container resource limits
+also apply. Increasing a timeout cannot repair unavailable evidence.
 
-## Report review
-
-The CLI prints the exact Markdown report path. Review the machine-readable summary
-without executing report content:
+## Retain and replay
 
 ```bash
-RUN_ID="replace-with-run-id"
-python -m json.tool "./reports/${RUN_ID}/report.json"
+dacctl run files htb-malevolent-modmaker \
+  ./evidence/artifact-one \
+  ./evidence/artifact-two \
+  --retain-evidence \
+  --output ./reports
+dacctl evidence list
+dacctl run evidence htb-malevolent-modmaker@0.1.2 --run-id RUN_ID
 ```
 
-Confirm:
+Retention keeps raw snapshots in managed storage. Host exports still contain only
+`report.json` and `report.md`. Use the exact retained run ID printed by the command.
+See [evidence replay](evidence-replay.md) for integrity checks and removal.
 
-- `summary.artifact_count` equals the successfully acquired files;
-- `summary.acquisition_issue_count` is zero for a complete run;
-- every expected rule has an evaluation;
-- evaluation statuses are understood;
-- findings refer to expected display paths and hashes;
-- the process exit code matches the report.
+## Review the report
 
-`MMM-003` is bundle-scoped and correlates loader and ransomware profiles on distinct
-artifacts across the entire supplied set. Running related artifacts together is
-therefore operationally different from scanning them in separate commands.
+```bash
+python -m json.tool ./reports/RUN_ID/report.json
+```
 
-## Completion criteria
+Check artefact count, acquisition issues, the expected rule evaluations, subject paths
+and hashes, pack version and the process exit code. Reports can contain sensitive
+metadata and should be viewed as untrusted text.
 
-- The report directory is stored in the approved location.
-- The run ID, pack ID, pack version, input hashes, and exit code are recorded.
-- Any acquisition issue or detector error is resolved or the run is labeled incomplete.
-- Temporary evidence was deleted automatically, or retained evidence is handled under
-  the replay playbook.
-- The original artifacts remain unchanged according to the operator's independent
-  hashes when those hashes were recorded.
+`MMM-003` correlates loader and ransomware profiles on distinct artefacts across the
+supplied set. Related files must be analysed together for that correlation to run.
+Separate single-file commands are not equivalent.
+
+Record the run ID, pack version, input hashes and exit code. Resolve acquisition issues
+or label the result incomplete. Unretained evidence and temporary workloads should be
+cleaned up; retained runs remain until explicitly removed.

@@ -5,10 +5,22 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
+import pytest
+
+from detection_goggles.errors import ContractError
 from detection_goggles.packs import load_pack
 from detection_goggles.runner import run_files
+from detection_goggles.runtime_guard import require_container
 
 PACK_ROOT = Path(__file__).resolve().parents[1]
+
+
+@pytest.fixture(autouse=True)
+def _verified_test_runtime():
+    try:
+        require_container("test")
+    except ContractError:
+        pytest.skip("Run pack tests inside the verified Podman test image")
 
 
 def _pe_shaped_bytes(*markers: bytes) -> bytes:

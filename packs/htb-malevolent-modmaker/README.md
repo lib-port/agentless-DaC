@@ -1,46 +1,65 @@
 # Malevolent ModMaker Detection Pack
 
 This is the first-party Detection Goggles pack for Hack The Box's **Malevolent
-ModMaker** Sherlock. It performs static analysis of files that the user obtains from
-Hack The Box. It does not download, include, execute, decrypt, or modify challenge
-artifacts.
+ModMaker** Sherlock. It statically analyses files obtained by the authorised operator.
+It does not download, include, execute, decrypt or modify challenge artefacts.
 
-The pack detects three explainable behavior profiles:
+The pack detects three explainable behaviour profiles:
 
 - `MMM-001`: a Windows Go executable combining AES-GCM primitives and file
   transformation operations;
 - `MMM-002`: a Windows executable combining network retrieval and process execution;
-- `MMM-003`: correlation of both profiles on distinct artifacts in one evidence set.
+- `MMM-003`: correlation of both profiles on distinct artefacts in one evidence set.
 
-Run it against extracted challenge files in an isolated malware-analysis environment:
+Detection Goggles core 0.2 or newer runs the pack in its mandatory rootless Podman
+workflow. Prepare the reviewed images and verify the runtime before analysis:
 
 ```bash
+dacctl runtime doctor
 dacctl run files htb-malevolent-modmaker ./path/to/artifact1 ./path/to/artifact2
 ```
 
-Or have the core fetch only explicitly named files from an authorized SSH target before
-running the same detectors locally:
+To fetch named files from an authorised POSIX SSH target, first register its literal
+IPv4 address, SSH port and independently verified host-key fingerprint:
+
+```bash
+dacctl target init lab \
+  --host 192.0.2.10 \
+  --port 22 \
+  --host-key-fingerprint SHA256:REPLACE_WITH_VERIFIED_FINGERPRINT
+```
+
+Register the printed public key on the intended target account, then acquire files:
 
 ```bash
 dacctl run ssh htb-malevolent-modmaker \
-  --host 10.10.10.10 --user htb \
+  --target lab --user analyst \
   --remote-file /opt/evidence/artifact1 \
   --remote-file /opt/evidence/artifact2
 ```
 
-Install the core's optional SSH support with `pip install 'detection-goggles[ssh]'`.
-This pack contains no remote playbook or credential material and declares
-`remote_execution: false`.
+Acquisition runs with access restricted to the saved target. A separate offline
+container evaluates the files without SSH credentials. The pack contains no remote
+playbook or credential material and declares `remote_execution: false`.
 
-The archive is self-testing. With Detection Goggles and pytest installed, run
-`pytest tests` from the unpacked pack directory. Its matching samples are generated
-in a temporary directory from inert PE-shaped bytes; no challenge binary is included.
-The artifact and correlation rules load the same shared static-profile implementation,
-so their marker requirements cannot drift. The archive includes its MIT license.
+Synthetic tests ship with the archive. Run them through the hardened test image from
+the trusted Detection Goggles checkout; direct host pytest and entrypoint execution
+are not supported:
 
-The detections are behavioral static heuristics, not a substitute for reverse
-engineering. Benign software can contain individual traits, and stripped or packed
-binaries can conceal them.
+```bash
+scripts/container-build
+scripts/container-test packs/htb-malevolent-modmaker/tests
+```
 
-Hack The Box and Malevolent ModMaker are referenced for interoperability and training
-context. This project is not affiliated with or endorsed by Hack The Box.
+Matching samples are generated in a temporary directory from inert PE-shaped bytes.
+No challenge binary is included. Artefact and correlation rules share the same static
+profile implementation so their marker requirements cannot drift. The archive
+includes its MIT licence.
+
+These are static behavioural heuristics, not a substitute for reverse engineering.
+Benign software can contain individual traits, and stripped or packed binaries can
+conceal them. A negative result does not prove that a file is safe. Rootless containers
+share the host kernel and do not provide virtual-machine isolation.
+
+Hack The Box and Malevolent ModMaker are referenced for interoperability and training.
+This project is not affiliated with or endorsed by Hack The Box.

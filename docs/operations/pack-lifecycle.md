@@ -2,210 +2,137 @@
 
 ## Scope
 
-This playbook covers operator installation and the maintainer's manual release process
-for the sole first-party pack. External Detection Pack submissions and pull requests are
-not accepted. GitHub Actions are not used.
+Manage independently versioned first-party packs using the container workflow.
+External Detection Pack submissions and pull requests are not accepted. Validation,
+archive preparation and publication are manual; the GitHub workflows handle mirroring
+and completed-run retention.
 
-## Inspect discoverable and available packs
+Pack code is executable and must be trusted before use. A matching archive digest
+proves consistency with expected metadata, not that the code is safe.
 
-List locally discoverable versions:
+## Inspect and validate
 
 ```bash
 dacctl pack list
-```
-
-List registry entries:
-
-```bash
-dacctl pack available
-```
-
-Use a local registry during offline review:
-
-```bash
+dacctl pack validate htb-malevolent-modmaker
+dacctl pack validate htb-malevolent-modmaker@0.1.2
+dacctl pack validate ./packs/htb-malevolent-modmaker
 dacctl pack available --registry ./registry/packs.yml
 ```
 
-Validate a discovered pack by ID, exact version, or source path:
+The source-tree pack is an explicitly known source input. Detection execution always
+uses the selected pack inside the container workflow; an explicit source path is
+admitted read-only and does not authorise native execution.
 
-```bash
-dacctl pack validate htb-malevolent-modmaker
-dacctl pack validate htb-malevolent-modmaker@0.1.1
-dacctl pack validate ./packs/htb-malevolent-modmaker
-```
-
-## Install from the registry
-
-```bash
-dacctl pack install htb-malevolent-modmaker
-```
-
-Pin an exact version when operational reproducibility requires it:
-
-```bash
-dacctl pack install htb-malevolent-modmaker@0.1.1
-```
-
-The installation fails if the version is incompatible with the core, the HTTPS download
-exceeds its limit, the digest differs, the archive is unsafe, the embedded identity does
-not match, or the same version is already installed.
+Installed packs live in managed storage. The launcher rejects `--destination-root`
+instead of writing installed pack code into arbitrary host directories. Exact versions
+can be selected with `pack-id@version`.
 
 ## Install a local archive
 
-First verify it against an inspected registry copy:
+Verify a trusted archive against an inspected registry copy:
 
 ```bash
-dacctl pack verify ./htb-malevolent-modmaker-0.1.1.tar.gz \
+dacctl pack verify ./htb-malevolent-modmaker-0.1.2.tar.gz \
   --registry ./registry/packs.yml
+dacctl pack install ./htb-malevolent-modmaker-0.1.2.tar.gz \
+  --sha256 5bbac3d60c288865b37afc4a3e7e34aa33d3d421376ec02f4ce31d565023f57b
 ```
 
-Then install with the explicit digest:
+A local install requires an explicit lowercase SHA-256. Do not trust a digest obtained
+only alongside an untrusted archive. Installation validates the pack, compatibility,
+identity and archive structure before admitting it to managed storage.
+
+Unsafe paths, links, devices, duplicate archive entries, excessive expanded size and
+excessive member counts are rejected. An already installed identical version is not
+silently overwritten.
+
+If the archive exactly matches the pack already bundled in the immutable image,
+installation verifies its digest and content and reports that it is already available.
+It does not create a duplicate managed installation. The same identity with different
+content is rejected.
+
+## Install a published registry version
 
 ```bash
-dacctl pack install ./htb-malevolent-modmaker-0.1.1.tar.gz \
-  --sha256 79083d7e291a4687edae28c91df153c652772899c483a34bc91ee47eeb732e1b
+dacctl pack available
+dacctl pack install htb-malevolent-modmaker@0.1.2
 ```
 
-Do not accept a digest delivered only alongside an untrusted archive; compare it with an
-independently obtained registry or release record.
+These commands require the registry and matching immutable release asset to have
+actually been published. A registry entry in a checkout is not evidence of publication.
 
-## Build a source-tree pack
+Network downloads run in a separate disposable workload with no evidence or target
+credential mounts. Registry and archive URLs require credential-free HTTPS and bounded
+downloads. The archive digest must match registry metadata before installation.
+
+## Build and validate a release
+
+Run the container suite, including the pack's synthetic tests:
 
 ```bash
+scripts/container-build
+scripts/container-test
+scripts/container-verify
 dacctl pack validate htb-malevolent-modmaker
-dacctl pack build htb-malevolent-modmaker --output ./dist
 ```
 
-The output directory may exist, but the builder refuses to overwrite the target archive.
-It prints the archive path and SHA-256.
+Do not substitute host `pytest` or directly invoke detector entrypoints. Runtime or
+integration failures remain release blockers until resolved or explicitly recorded as
+unvalidated work. Live network validation is additional to offline verification; see
+[the container playbook](containers.md).
 
-Run the tests embedded in the unpacked pack with the core and pytest installed:
+Choose a canonical stable `X.Y.Z` pack version independently of the core. A change
+to shipped code, metadata, tests or documentation changes the archive and requires an
+appropriate new version and digest. Update the manifest, registry identity/URL/tag and
+versioned documentation together.
 
-```bash
-pytest packs/htb-malevolent-modmaker/tests
-```
-
-## Maintainer release procedure
-
-There is no automated validation or release workflow. The maintainer performs every
-step locally.
-
-### 1. Choose and apply the version
-
-Use stable canonical `X.Y.Z` semantic versions for the pack independently of the core.
-Prerelease and build suffixes are not part of the v1 pack contract. Update:
-
-- `pack.yml` pack version;
-- `registry/packs.yml` version, archive name, URL, and release tag;
-- versioned commands or digests in documentation when present.
-
-Changing detection behavior, metadata with operational meaning, pack tests, or shipped
-documentation changes the archive and therefore requires a new digest. Use an
-appropriate version increase rather than replacing an already published archive.
-
-### 2. Validate source and tests
+Build twice into different directories:
 
 ```bash
-ruff check .
-ruff format --check .
-pytest
-dacctl pack validate htb-malevolent-modmaker
-ansible-playbook --syntax-check -i 'dac_target,' \
-  src/detection_goggles/ansible/fetch_files.yml
-python -m build
-```
-
-Review the pack tree and confirm it contains no live malware, challenge answers,
-credentials, flags, decrypted victim data, bytecode, or unexpected files.
-
-### 3. Build twice
-
-Use two empty directories:
-
-```bash
-PACK_VERSION="0.1.1"
 dacctl pack build htb-malevolent-modmaker --output ./dist-a
 dacctl pack build htb-malevolent-modmaker --output ./dist-b
-cmp "./dist-a/htb-malevolent-modmaker-${PACK_VERSION}.tar.gz" \
-  "./dist-b/htb-malevolent-modmaker-${PACK_VERSION}.tar.gz"
+cmp ./dist-a/htb-malevolent-modmaker-0.1.2.tar.gz \
+  ./dist-b/htb-malevolent-modmaker-0.1.2.tar.gz
+sha256sum ./dist-a/htb-malevolent-modmaker-0.1.2.tar.gz
 ```
 
-Any byte difference blocks release until explained.
-
-### 4. Record the digest
-
-```bash
-PACK_VERSION="0.1.1"
-sha256sum "./dist-a/htb-malevolent-modmaker-${PACK_VERSION}.tar.gz"
-```
-
-Put that exact lowercase digest in `registry/packs.yml` and any version-specific install
-example. Rebuild only if a file inside the pack changed; registry and root documentation
-are not part of the pack archive.
-
-### 5. Verify registry consistency
+The builder refuses an existing archive name and must not publish a partial file on
+failure. Host archive export is limited to 20 MiB, separately from the 64 MiB download
+limit and expanded-archive limits. Confirm byte-for-byte equality, record the final
+digest in `registry/packs.yml`, and verify it:
 
 ```bash
-PACK_VERSION="0.1.1"
-dacctl pack verify "./dist-a/htb-malevolent-modmaker-${PACK_VERSION}.tar.gz" \
+dacctl pack verify ./dist-a/htb-malevolent-modmaker-0.1.2.tar.gz \
   --registry ./registry/packs.yml
 ```
 
-Run the complete test suite again because a digest mismatch is a release-blocking test.
+Inspect the pack tree for restricted artefacts, credentials, live malware, generated
+bytecode and unexpected files. Every pack archive must include its own licence.
 
-### 6. Smoke-test installation
+## Smoke-test and publish
 
-Use an empty temporary destination and the recorded digest:
+Use a fresh managed installation state when validating an unpublished version. Install
+the final archive with its recorded digest, validate the exact version, and run a clean
+synthetic fixture through `dacctl run files`. Do not edit an installed immutable version
+or bypass duplicate-version rejection.
 
-```bash
-PACK_VERSION="0.1.1"
-PACK_SHA256="replace-with-recorded-lowercase-sha256"
-dacctl pack install "./dist-a/htb-malevolent-modmaker-${PACK_VERSION}.tar.gz" \
-  --destination-root ./release-smoke/packs \
-  --sha256 "${PACK_SHA256}"
-dacctl pack validate \
-  "./release-smoke/packs/htb-malevolent-modmaker/${PACK_VERSION}"
-```
-
-Run its self-contained tests from the installed version directory, then run one clean
-fixture through `dacctl run files`.
-
-### 7. Prepare release files
-
-From a staging directory containing only the final archive:
+Prepare a checksum record from a staging directory containing the final archive:
 
 ```bash
-PACK_VERSION="0.1.1"
-PACK_ARCHIVE="htb-malevolent-modmaker-${PACK_VERSION}.tar.gz"
-sha256sum "${PACK_ARCHIVE}" > SHA256SUMS
+sha256sum htb-malevolent-modmaker-0.1.2.tar.gz > SHA256SUMS
 sha256sum --check SHA256SUMS
 ```
 
-Manually create the GitHub release with the exact `release_tag` recorded in the registry
-and upload the archive plus `SHA256SUMS`. Do not mutate or replace those assets after
-publication.
+Manually create the GitHub release with the exact registry tag and upload the archive
+plus `SHA256SUMS`. Published assets are immutable. Afterwards, verify registry listing
+and installation by exact ID/version through a fresh managed environment. Preserve
+the validation results, host/runtime versions, image IDs, build digests, final registry,
+tag and release checksum.
 
-### 8. Post-release verification
+## Version selection
 
-After publication:
-
-```bash
-PACK_VERSION="0.1.1"
-dacctl pack available
-dacctl pack install "htb-malevolent-modmaker@${PACK_VERSION}" \
-  --destination-root ./release-download-smoke
-```
-
-Confirm the installed identity and run a clean fixture. Preserve the local validation
-record, both build digests, final registry, tag, and release asset checksum.
-
-## Version selection and rollback
-
-When multiple versions are installed, an unversioned ID resolves to the newest version
-compatible with the core from the first trusted root containing that pack ID.
-Operational procedures that require stable behavior should always use an exact reference
-such as `htb-malevolent-modmaker@0.1.1`.
-
-There is no uninstall or automatic rollback command. Keep prior immutable versions when
-rollback is a requirement. Removal is a manual operator action after resolving the exact
-versioned directory.
+Use an exact reference such as `htb-malevolent-modmaker@0.1.2` when a recorded
+procedure depends on rule behaviour. Keep earlier trusted immutable versions when
+rollback is required. The CLI has no automatic rollback or pack uninstall command;
+do not remove unrelated Podman volumes to reset an installation.

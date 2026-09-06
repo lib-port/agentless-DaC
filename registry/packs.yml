@@ -4,11 +4,11 @@ schema_version: 1
 # publish it manually with its SHA-256 checksum.
 packs:
   - id: htb-malevolent-modmaker
-    version: 0.1.1
-    core: ">=0.1.0,<1.0.0"
+    version: 0.1.2
+    core: ">=0.2.0,<1.0.0"
     platform: windows
     source: packs/htb-malevolent-modmaker
-    archive: htb-malevolent-modmaker-0.1.1.tar.gz
-    sha256: 79083d7e291a4687edae28c91df153c652772899c483a34bc91ee47eeb732e1b
-    url: https://github.com/libport/agentless-DaC/releases/download/pack-htb-malevolent-modmaker-v0.1.1/htb-malevolent-modmaker-0.1.1.tar.gz
-    release_tag: pack-htb-malevolent-modmaker-v0.1.1
+    archive: htb-malevolent-modmaker-0.1.2.tar.gz
+    sha256: 5bbac3d60c288865b37afc4a3e7e34aa33d3d421376ec02f4ce31d565023f57b
+    url: https://github.com/lib-port/agentless-DaC/releases/download/pack-htb-malevolent-modmaker-v0.1.2/htb-malevolent-modmaker-0.1.2.tar.gz
+    release_tag: pack-htb-malevolent-modmaker-v0.1.2

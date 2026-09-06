@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from detection_goggles.errors import ContractError
+from detection_goggles.runtime_guard import require_container
 from detection_goggles.schema import validate
 
 DEFAULT_MAX_FILE_SIZE = 128 * 1024 * 1024
@@ -107,6 +108,7 @@ def _expand_inputs(
     recursive: bool,
     follow_symlinks: bool,
     max_files: int,
+    input_boundaries: tuple[Path, ...] = (),
 ) -> tuple[list[tuple[Path, str]], list[dict[str, str]]]:
     files: list[tuple[Path, str]] = []
     issues: list[dict[str, str]] = []
@@ -191,6 +193,26 @@ def _expand_inputs(
                         )
                     )
                     continue
+                if input_boundaries:
+                    try:
+                        resolved = child_directory.resolve(strict=True)
+                    except (OSError, RuntimeError):
+                        issues.append(
+                            _issue(child_directory, "io_error", "Cannot resolve input directory")
+                        )
+                        continue
+                    if not any(
+                        resolved == boundary or resolved.is_relative_to(boundary)
+                        for boundary in input_boundaries
+                    ):
+                        issues.append(
+                            _issue(
+                                child_directory,
+                                "symlink_rejected",
+                                "Directory escapes its selected input boundary",
+                            )
+                        )
+                        continue
                 retained_directories.append(name)
             directory_names[:] = retained_directories
 
@@ -425,6 +447,7 @@ class LocalEvidenceWorkspace(AbstractContextManager[EvidenceBundle]):
         max_file_size: int = DEFAULT_MAX_FILE_SIZE,
         max_total_size: int = DEFAULT_MAX_TOTAL_SIZE,
         max_files: int = DEFAULT_MAX_FILES,
+        input_boundaries: Iterable[Path] | None = None,
     ) -> None:
         self.inputs = tuple(inputs)
         self.recursive = recursive
@@ -432,10 +455,12 @@ class LocalEvidenceWorkspace(AbstractContextManager[EvidenceBundle]):
         self.max_file_size = max_file_size
         self.max_total_size = max_total_size
         self.max_files = max_files
+        self.input_boundaries = tuple(input_boundaries or ())
         self._temporary: tempfile.TemporaryDirectory[str] | None = None
         self.bundle: EvidenceBundle | None = None
 
     def __enter__(self) -> EvidenceBundle:
+        require_container("import", "acquire", "analyse", "test")
         validate_acquisition_limits(
             max_file_size=self.max_file_size,
             max_total_size=self.max_total_size,
@@ -454,11 +479,26 @@ class LocalEvidenceWorkspace(AbstractContextManager[EvidenceBundle]):
             recursive=self.recursive,
             follow_symlinks=self.follow_symlinks,
             max_files=self.max_files,
+            input_boundaries=self.input_boundaries,
         )
         artifacts: list[dict[str, Any]] = []
         total_size = 0
 
         for source, display in expanded:
+            if self.input_boundaries:
+                try:
+                    resolved_source = source.resolve(strict=True)
+                except (OSError, RuntimeError):
+                    issues.append(_issue(display, "io_error", "Cannot resolve selected input"))
+                    continue
+                if not any(
+                    resolved_source == boundary or resolved_source.is_relative_to(boundary)
+                    for boundary in self.input_boundaries
+                ):
+                    issues.append(
+                        _issue(display, "symlink_rejected", "Input escapes its selected boundary")
+                    )
+                    continue
             if len(artifacts) >= self.max_files:
                 issues.append(_issue(display, "file_limit", f"File limit {self.max_files} reached"))
                 continue
@@ -528,6 +568,7 @@ def load_evidence_bundle(
     max_total_size: int = DEFAULT_MAX_TOTAL_SIZE,
     max_files: int = DEFAULT_MAX_FILES,
 ) -> EvidenceBundle:
+    require_container("import", "acquire", "analyse", "export", "test")
     validate_acquisition_limits(
         max_file_size=max_file_size,
         max_total_size=max_total_size,
@@ -566,6 +607,7 @@ def retain_evidence(
     max_total_size: int | None = None,
     max_files: int | None = None,
 ) -> Path:
+    require_container("import", "acquire", "analyse", "export", "test")
     target = destination / "evidence"
     if target.exists():
         raise ContractError(f"Refusing to overwrite retained evidence: {target}")

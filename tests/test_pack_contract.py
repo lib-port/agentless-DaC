@@ -6,11 +6,13 @@ import pytest
 from detection_goggles.errors import ContractError
 from detection_goggles.packs import default_pack_roots, discover_packs, load_pack, resolve_pack
 
+pytestmark = pytest.mark.container
+
 
 def test_only_first_party_pack_is_discoverable() -> None:
     packs = discover_packs(default_pack_roots())
 
-    assert [(pack.id, pack.version) for pack in packs] == [("htb-malevolent-modmaker", "0.1.1")]
+    assert [(pack.id, pack.version) for pack in packs] == [("htb-malevolent-modmaker", "0.1.2")]
     assert packs[0].manifest["pack"]["first_party"] is True
     assert packs[0].manifest["capabilities"]["remote_execution"] is False
     assert set(packs[0].manifest["capabilities"]["sources"]) == {"files", "evidence", "ssh"}
@@ -33,7 +35,7 @@ def test_current_directory_is_not_an_implicit_pack_root(monkeypatch, tmp_path: P
     monkeypatch.chdir(tmp_path)
 
     roots = default_pack_roots()
-    resolved = resolve_pack("htb-malevolent-modmaker@0.1.1", roots)
+    resolved = resolve_pack("htb-malevolent-modmaker@0.1.2", roots)
 
     assert shadow_root not in roots
     assert resolved.path == source_pack.path
@@ -58,7 +60,7 @@ def test_noncanonical_pack_version_is_rejected_during_load(tmp_path: Path) -> No
     shutil.copytree(source_pack.path, invalid)
     manifest = invalid / "pack.yml"
     manifest.write_text(
-        manifest.read_text(encoding="utf-8").replace("version: 0.1.1", "version: 1.0.0-."),
+        manifest.read_text(encoding="utf-8").replace("version: 0.1.2", "version: 1.0.0-."),
         encoding="utf-8",
     )
 

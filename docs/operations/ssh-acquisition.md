@@ -1,183 +1,151 @@
 # Playbook: SSH acquisition
 
-## Objective
+## Objective and prerequisites
 
-Fetch only explicitly named files from an authorized POSIX SSH host, snapshot them on
-the controller, and run Malevolent ModMaker detections locally.
+Fetch explicitly named files from a saved, authorised POSIX SSH target and analyse
+them offline. Complete [controller setup](controller-setup.md) and the actual host's
+[container validation](containers.md) first.
 
-## Preconditions
+The operator must know each absolute remote file path and be authorised to read it.
+The adapter does not discover candidate files, walk remote directories or collect
+general process, network, user or service telemetry. Python and the normal Ansible
+module prerequisites must be available on the target.
 
-- The core was installed with the `ssh` optional dependency.
-- `ansible-playbook` and an OpenSSH client are available.
-- The operator is authorized to read every requested remote path.
-- Each remote path is an absolute POSIX path to an expected regular file.
-- The target host key was verified through an appropriate independent channel.
-- SSH-agent, private-key, or interactive password authentication is ready.
-- Elevation requirements were determined before the run.
+## Register a target
 
-The adapter does not discover candidate files, walk remote directories, or collect
-process, network, user, service, or log telemetry. The operator must know the paths.
-
-## Preflight
-
-Confirm tool versions and pack capability:
+Obtain the SSH host-key fingerprint through an independent trusted channel. For
+example, an authorised target administrator can inspect its public host key:
 
 ```bash
-ansible-playbook --version
-dacctl pack validate htb-malevolent-modmaker
-dacctl pack list
+ssh-keygen -E sha256 -lf /etc/ssh/ssh_host_ed25519_key.pub
 ```
 
-With strict host-key checking, confirm that the target is already known when required:
+Initialise the local profile using a literal IPv4 address:
 
 ```bash
-ssh-keygen -F 10.10.10.10
+dacctl target init lab \
+  --host 192.0.2.10 \
+  --port 22 \
+  --host-key-fingerprint SHA256:REPLACE_WITH_VERIFIED_FINGERPRINT
 ```
 
-An optional manual SSH test may be performed using the same user, port, and key. Do not
-put a password in a command or environment variable.
+Initialisation checks the target key against the expected fingerprint and creates
+encrypted credentials in a project-managed volume. Follow the interactive passphrase
+prompt. Only the public key is printed; register it on a dedicated target account
+with read access to the intended files.
 
-## Procedure: SSH agent
+Where suitable for the target configuration, limit the authorised public key with
+OpenSSH restrictions. Ansible still needs to execute its own modules; avoid a forced
+command that prevents normal file acquisition. Remote sudo is optional and should
+only be granted when the selected paths require it.
 
-When an authorized key is already loaded in the agent:
+```bash
+dacctl target list
+```
+
+The profile records the name, IPv4 address, port, expected fingerprint and managed
+volume reference. It does not store private key bytes or passwords in host metadata.
+
+## Acquire named regular files
 
 ```bash
 dacctl run ssh htb-malevolent-modmaker \
-  --host 10.10.10.10 \
-  --user htb \
+  --target lab \
+  --user analyst \
   --remote-file /opt/evidence/artifact-one \
   --remote-file /opt/evidence/artifact-two \
   --output ./reports
 ```
 
-The adapter passes the current controller process's `SSH_AUTH_SOCK` to Ansible but does
-not pass arbitrary caller environment variables. In the disposable Vagrant profile,
-`scripts/vm-shell` prevents the physical host's agent from entering the VM. Start an agent
-inside the guest and load only the per-VM key; only that guest-local socket can reach
-Ansible.
+Every operation creates a fresh rootless network namespace. A short-lived initialiser
+applies the saved target-and-port allowlist before the unprivileged acquisition worker
+runs. The acquisition worker cannot change the firewall. It uses strict host-key
+checking; `run ssh` does not accept arbitrary hosts or `accept-new`.
 
-## Procedure: explicit private key
+The generated key stays inside managed storage. An encrypted key may require an
+interactive passphrase. The physical host's SSH agent and SSH directory are not
+forwarded.
 
-```bash
-dacctl run ssh htb-malevolent-modmaker \
-  --host 10.10.10.10 \
-  --user htb \
-  --identity ~/.ssh/id_ed25519 \
-  --remote-file /opt/evidence/artifact-one \
-  --remote-file /opt/evidence/artifact-two \
-  --output ./reports
-```
+## Explicit identity import or password prompt
 
-The identity path must resolve to a regular controller-local file. Key content is never
-copied into the ephemeral inventory or report.
-
-## Procedure: interactive password
+To use an existing authorised key, import only that selected regular file:
 
 ```bash
 dacctl run ssh htb-malevolent-modmaker \
-  --host 10.10.10.10 \
-  --user htb \
-  --ask-pass \
-  --remote-file /opt/evidence/artifact-one \
-  --output ./reports
-```
-
-Ansible prompts interactively. There is no `--password` option. Never redirect a
-password into standard input or include it in a wrapper command.
-
-## Host-key policy
-
-The default policy is `strict`. An unknown or changed key stops acquisition. For an
-authorized disposable lab host whose first-seen key cannot be preloaded, opt in once:
-
-```bash
-dacctl run ssh htb-malevolent-modmaker \
-  --host 10.10.10.10 \
-  --user htb \
-  --host-key-policy accept-new \
+  --target lab \
+  --user analyst \
+  --identity /absolute/path/to/selected_private_key \
   --remote-file /opt/evidence/artifact-one
 ```
 
-`accept-new` accepts and records an unknown key but still rejects a changed known key.
-It changes the controller's known-host state. Do not use it as a workaround for a key
-mismatch; resolve unexpected key changes before retrying.
+The selected key is made available only to acquisition. It is not included in reports,
+detector requests or analysis mounts. Do not supply an entire SSH directory.
 
-## Non-default port and connection timeout
+For password authentication:
 
 ```bash
 dacctl run ssh htb-malevolent-modmaker \
-  --host lab.example \
-  --port 2222 \
+  --target lab \
   --user analyst \
-  --connection-timeout 20 \
-  --acquisition-timeout 600 \
-  --remote-file /srv/evidence/sample.bin
+  --ask-pass \
+  --remote-file /opt/evidence/artifact-one
 ```
 
-The connection timeout must be from 1 through 300 seconds and controls each SSH
-connection establishment. The acquisition timeout must be from 1 through 3,600 seconds
-and bounds the complete Ansible process group, including inspection and transfer. Both
-are separate from the detector timeout.
+Passwords are entered interactively, never as CLI arguments or environment variables.
 
-## Privilege escalation
-
-Use elevation only when the SSH account cannot read a required path:
+## Limits and elevation
 
 ```bash
 dacctl run ssh htb-malevolent-modmaker \
-  --host 10.10.10.10 \
-  --user htb \
-  --become \
-  --ask-become-pass \
-  --remote-file /restricted/evidence/sample.bin
-```
-
-`--ask-become-pass` requires `--become`. Elevation broadens readable data and can cause
-Ansible to buffer a remote file while determining its checksum. Reduce limits before an
-elevated run and request the smallest possible file set.
-
-## Transfer and detector limits
-
-Apply limits exactly as for local acquisition:
-
-```bash
-dacctl run ssh htb-malevolent-modmaker \
-  --host 10.10.10.10 \
-  --user htb \
+  --target lab \
+  --user analyst \
   --remote-file /opt/evidence/artifact-one \
   --max-file-size 32MiB \
   --max-total-size 64MiB \
   --max-files 5 \
+  --connection-timeout 20 \
+  --acquisition-timeout 600 \
   --timeout 5
 ```
 
-Remote `stat` metadata is used to exclude ineligible files before fetch. Every inspection
-and fetch result is recorded separately. A failed checksum or fetch outcome is rejected
-even if Ansible left a residual destination file. The fetched copy is then subjected to
-local limits and hashing again. A target can change a file between inspection and
-transfer, so controller-side verification remains authoritative.
+The connection timeout covers each SSH connection attempt; the acquisition timeout
+bounds the complete acquisition. Detector timeouts apply later in offline analysis.
+Remote metadata is checked before transfer where possible, and fetched files are
+rechecked and hashed when snapshotted.
 
-## Target-side behavior
+Use `--become` only when the selected path requires elevated read access.
+`--ask-become-pass` requires `--become` and requests an interactive prompt.
+Elevation can cause Ansible to buffer remote content while determining checksums.
 
-The core-owned playbook performs `stat` and `fetch` operations. It does not run a pack
-script, execute an artifact, install an agent, or create the evidence report remotely.
-Ansible can use transient module staging on the remote account; normal Ansible cleanup
-applies. Controller inventory, status files, fetch staging, and control paths live in an
-owner-only temporary directory and are deleted when the adapter exits.
+## Target behaviour and partial results
 
-## Partial acquisition
+The core-owned playbook performs inspection and fetching. It does not install an
+agent, execute an artefact or run pack code on the target. Ansible can stage transient
+modules in the target account; normal Ansible cleanup applies.
 
-The playbook continues across path-level conditions when the connection itself remains
-usable. Missing, linked, non-regular, inaccessible, oversized, or unfetched paths become
-acquisition issues. If at least one file succeeds, detections run on that subset and the
-command returns `2`. If no regular remote artifact succeeds, the command stops with an
-operational error and writes no normal run report.
+Missing, linked, non-regular, inaccessible, oversized or unfetched paths become
+acquisition issues. A failed transfer is never accepted merely because a residual
+destination file exists. A changing target can race metadata and transfer; local
+snapshot integrity checks remain authoritative.
 
-## Completion criteria
+Successfully acquired files are handed to a separate analysis container without
+networking or credentials. A partial run can produce findings but returns `2`.
+Total acquisition failure may produce no normal report. Temporary acquisition
+workloads and namespaces are removed after use.
 
-- The report identifies source `ssh` and the intended host and port.
-- Artifact display paths correspond only to explicitly requested paths.
-- Acquisition issues are zero, or the result is labeled incomplete.
-- No credential appears in the report, retained manifest, command history, or pack.
-- `accept-new` and `become`, if used, are recorded as operator decisions.
-- Retained evidence, if requested, is handled under the replay playbook.
+## Retention and retirement
+
+Add `--retain-evidence` when later replay is required. Raw evidence stays in managed
+storage and host exports contain only JSON and Markdown reports. Check the report's
+source, target, requested display paths and acquisition issues.
+
+Retire a local target explicitly:
+
+```bash
+dacctl target remove lab
+```
+
+Remove the corresponding public key from the remote account separately. Local volume
+removal does not revoke a remote credential or guarantee secure erasure. For a changed
+target or host key, verify the new identity independently and create a new profile;
+do not weaken host-key checks.

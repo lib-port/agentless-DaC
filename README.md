@@ -1,107 +1,80 @@
 # Detection Goggles
 
-Detection Goggles is a source-agnostic Detection-as-Code runner for defensive labs.
-It acquires evidence once, runs first-party detections locally in isolated subprocesses,
-validates every result, and writes machine-readable and analyst-readable reports.
+Detection Goggles is an agentless Detection-as-Code runner for defensive labs. It
+acquires explicitly selected files, runs trusted first-party static detections in
+disposable rootless Podman containers, validates the results, and exports JSON and
+Markdown reports.
 
-The initial first-party Detection Pack targets Hack The Box's **Malevolent ModMaker**
-Sherlock. Detection Goggles does not include or download any Hack The Box artifacts.
-You provide the files you are authorized to analyze.
-
-> Detection Goggles is an independent project. It is not affiliated with or endorsed
-> by Hack The Box.
+The initial Detection Pack targets Hack The Box's **Malevolent ModMaker** Sherlock.
+The repository neither includes nor downloads challenge artefacts. Supply only files
+you are authorised to analyse. Detection Goggles is an independent project and is not
+affiliated with or endorsed by Hack The Box.
 
 ## Project policy
 
 This is a maintainer-developed project. External pull requests and contributions of
-code, documentation, or Detection Packs are not accepted. Security reporting and
-coordinated disclosure are not supported; do not send suspected vulnerabilities,
-malware, credentials, or sensitive evidence to the maintainer. Read
+code, documentation or Detection Packs are not accepted. Security reporting and
+coordinated disclosure are not supported. Do not send suspected vulnerabilities,
+malware, credentials or sensitive evidence to the maintainer. Read
 [SECURITY.md](SECURITY.md) before operating the software.
 
-## Documentation
+## Execution model
 
-- [Architecture](docs/ARCHITECTURE.md): components, Mermaid data flows, contracts,
-  trust boundaries, packaging, and extension rules.
-- [Operational playbooks](docs/operations/README.md): controller setup, local analysis,
-  SSH acquisition, replay, pack lifecycle, and troubleshooting.
-- [Disposable Vagrant controller](docs/operations/vagrant-controller.md): hardened,
-  disposable isolation on a bare-metal Debian 12 amd64 KVM/libvirt host, with guest-only
-  evidence and report-only export.
-- [Security policy](SECURITY.md): unsupported security-reporting posture and known
-  operational boundaries.
-- [Maintainer development guide](DEVELOPMENT.md): internal pack contract and validation
-  requirements.
+Podman is required for detector execution, including tests that run detections. The
+host command is a launcher: each operation uses a disposable workload, and detector
+code runs in a separate analysis container with networking disabled. There is no
+native detector fallback when the runtime is missing or its checks fail.
 
-## What works in v0.1
+SSH acquisition uses a saved target profile with a literal IPv4 address, port and
+independently verified host-key fingerprint. A short-lived network initialiser
+restricts a fresh rootless network namespace to that target and port before the
+unprivileged acquisition workload starts. Analysis then runs offline without SSH
+credentials. A separate downloader handles pack registry traffic.
 
-- repeatable local analysis of one or more explicitly selected files;
-- bounded SSH/Ansible acquisition of explicitly selected remote files;
-- evidence snapshots with SHA-256 integrity metadata;
-- replay of retained evidence without touching the original files;
-- schema-validated Detection Packs, rules, evaluations, findings, and reports;
-- one subprocess per detector, with a scrubbed environment and resource limits;
-- JSON and Markdown reports;
-- reproducible, independently installable pack archives;
-- the first-party `htb-malevolent-modmaker` pack.
-
-Malevolent ModMaker is artifact-driven, so the SSH source fetches named files rather
-than collecting unrelated host telemetry. The pack never supplies remote tasks and its
-detectors never execute on the target.
-
-## Architecture
+Rootless containers share the host kernel. This boundary reduces access to host files,
+credentials and networks; it does not provide the isolation of a separate guest
+kernel or make arbitrary pack code safe. The initial integration target is native
+Linux amd64 with cgroup v2, using Kali Linux and Podman 5.8.6. Operational validation
+must be completed on the actual host; see [the container playbook](docs/operations/containers.md).
 
 ```mermaid
-flowchart TD
-    Local["Explicit local files"] --> Sources["Source adapters"]
-    SSH["Named files over SSH"] --> Sources
-    Replay["Retained evidence"] --> Sources
-    Sources --> Evidence["Evidence Bundle v1<br/>metadata and hashed snapshots"]
-    Evidence --> Engine["Isolated detector processes"]
-    Engine --> Evaluations["Evaluations"]
-    Engine --> Findings["Findings"]
-    Evaluations --> Reports["JSON and Markdown report"]
-    Findings --> Reports
+flowchart LR
+    Local["Selected local files"] --> Offline["Offline analysis container"]
+    Target["Pinned SSH target"] --> Acquire["Target-only acquisition container"]
+    Acquire --> Evidence["Managed evidence volume"]
+    Evidence --> Offline
+    Replay["Retained evidence"] --> Offline
+    Packs["Managed trusted pack"] --> Offline
+    Offline --> Reports["Validated JSON and Markdown reports"]
+    Reports --> Export["Explicit host output directory"]
 ```
 
-An evaluation describes every rule outcome: `detected`, `not_detected`, `unknown`,
-`error`, or `not_applicable`. Only `detected` evaluations produce findings. This keeps
-“no match” distinct from missing evidence or a failed detector.
+## Set up the controller
 
-The complete component model, trust boundaries, data contracts, and execution
-sequences are documented in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
-## Install for development
-
-Python 3.11 or newer is required.
+Install rootless Podman and its host prerequisites using the
+[controller setup playbook](docs/operations/controller-setup.md), then install the
+launcher from a trusted checkout:
 
 ```bash
 python -m venv .venv
 . .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e .
+scripts/container-build
+dacctl runtime doctor
+scripts/container-verify
 ```
 
-Install the optional, core-owned Ansible transport when remote acquisition is needed:
-
-```bash
-python -m pip install -e '.[dev,ssh]'
-```
-
-List and validate the source-tree pack:
+The build records immutable local image IDs in
+`${XDG_CONFIG_HOME:-~/.config}/detection-goggles/images.json`. Rebuild deliberately
+when trusted source or dependencies change. Runtime commands do not silently pull a
+new image or execute detectors on the host.
 
 ```bash
 dacctl pack list
 dacctl pack validate htb-malevolent-modmaker
 ```
 
-`pack list` includes the resolved source path. Detection Goggles never searches an
-unrelated current working directory for packs; non-default roots must be supplied with
-`--pack-root` or `DAC_PACK_PATH`.
-
-## Analyze Malevolent ModMaker files
-
-Extract the challenge archive in an isolated malware-analysis environment, then name
-the files explicitly:
+## Analyse local files
 
 ```bash
 dacctl run files htb-malevolent-modmaker \
@@ -109,144 +82,127 @@ dacctl run files htb-malevolent-modmaker \
   ./evidence/artifact-two
 ```
 
-Directories are rejected unless recursion is explicitly authorized:
+Selected files are copied into managed evidence storage. The container does not receive
+a mount of your home directory or the full source directory. Directory recursion
+requires `--recursive`; symbolic links and non-regular inputs are rejected by default.
+Inputs are read as data and are never executed.
 
 ```bash
 dacctl run files htb-malevolent-modmaker ./evidence --recursive
 ```
 
-Symbolic links, devices, sockets, and FIFOs are rejected by default. Inputs are copied
-read-only into an owner-only temporary directory and are never executed or modified.
-Default limits are 128 MiB per file, 512 MiB in total, and 1,000 files; each can be
-lowered on the command line.
-
-Reports are written to `reports/<run-id>/report.json` and `report.md`. Raw snapshots are
-deleted after evaluation unless retention is explicitly requested:
+Defaults are 128 MiB per file, 512 MiB total, 1,000 files and a 10-second detector
+timeout cap. CLI options can adjust these within the evidence contract's hard limits.
+Reports are exported to `reports/<run-id>/report.json` and `report.md`. Raw snapshots
+are removed after the run unless `--retain-evidence` is selected; retained snapshots
+remain in managed storage and are not exported alongside reports.
 
 ```bash
-dacctl run files htb-malevolent-modmaker ./evidence/sample \
-  --retain-evidence
+dacctl run files htb-malevolent-modmaker ./evidence/sample --retain-evidence
+dacctl evidence list
+dacctl run evidence htb-malevolent-modmaker --run-id RUN_ID
+dacctl evidence remove RUN_ID
 ```
 
-Replay the retained bundle later:
+An existing Evidence Bundle v1 directory can also be explicitly imported with
+`dacctl run evidence htb-malevolent-modmaker ./saved-bundle`.
+
+## Acquire named files over SSH
+
+Register the target using its host-key fingerprint obtained through an independent
+trusted channel:
 
 ```bash
-RUN_ID="replace-with-original-run-id"
-dacctl run evidence htb-malevolent-modmaker \
-  "./reports/${RUN_ID}/evidence"
+dacctl target init lab \
+  --host 192.0.2.10 \
+  --port 22 \
+  --host-key-fingerprint SHA256:REPLACE_WITH_VERIFIED_FINGERPRINT
 ```
 
-### Acquire named files over SSH
-
-The SSH adapter checks and fetches only absolute POSIX paths supplied with
-`--remote-file`, then applies the normal controller-side snapshot and detector
-pipeline. The current adapter targets POSIX SSH hosts; the files themselves can be
-Windows executables:
+Initialisation creates an encrypted key in managed storage and prints its public key.
+Register that public key on a dedicated target account with access to the required
+files. The private key stays in managed storage. Then run:
 
 ```bash
 dacctl run ssh htb-malevolent-modmaker \
-  --host 10.10.10.10 \
-  --user htb \
+  --target lab \
+  --user analyst \
   --remote-file /opt/evidence/artifact-one \
-  --remote-file /opt/evidence/artifact-two \
-  --acquisition-timeout 600 \
-  --identity ~/.ssh/id_ed25519
+  --remote-file /opt/evidence/artifact-two
 ```
 
-SSH-agent authentication is used automatically when available. To use a password,
-request Ansible's interactive prompt with `--ask-pass`; there is deliberately no
-password command-line option. Host-key verification is strict by default. For a new,
-disposable lab host, `--host-key-policy accept-new` records the first-seen key while
-still rejecting a changed key.
+The core-owned Ansible transport fetches only explicitly named regular files. It does
+not install an agent or run pack scripts on the target. Each acquisition has a fresh
+network namespace restricted to the saved target and port. Host-key checking is strict;
+free-form targets and `accept-new` are not available on `run ssh`.
 
-Remote final-component symbolic links and non-regular paths are rejected. Failed fetch
-or checksum outcomes are never admitted merely because a residual local file exists.
-The same file-count and byte limits apply before transfer where remote metadata permits.
-`--acquisition-timeout` bounds the complete Ansible run, while `--connection-timeout`
-bounds connection establishment. `--become` and `--ask-become-pass` are opt-in; avoid
-elevation unless the selected path requires it. The `host` command is accepted as an
-alias for `ssh`.
+An existing private key can be explicitly imported for a run with `--identity PATH`.
+The host SSH directory and agent are not forwarded. `--ask-pass`, `--become` and
+`--ask-become-pass` remain explicit options; passwords are never CLI arguments.
 
-### Exit codes
+```bash
+dacctl target list
+dacctl target remove lab
+```
 
-| Code | Meaning |
+Removing a target deletes its managed local credentials. Remove its public key from
+the remote account separately. Volume deletion does not guarantee secure erasure.
+
+## Results
+
+Every rule produces an evaluation: `detected`, `not_detected`, `unknown`, `error` or
+`not_applicable`. Only `detected` evaluations produce findings. A negative result is
+not proof that a file is safe.
+
+| Exit code | Meaning |
 | ---: | --- |
-| `0` | Evaluation completed and no detections matched |
-| `1` | One or more detections matched |
-| `2` | Acquisition was partial, evidence was unavailable, or an operational error occurred |
+| `0` | Complete evaluation with no detections |
+| `1` | Complete evaluation with one or more detections |
+| `2` | Partial acquisition, unavailable evidence or an operational error |
 
-## Pack distribution
+An error takes precedence over detections in the same run. JSON is the automation
+record; Markdown is for analyst review. Exported reports can contain sensitive paths,
+hashes and findings even though they omit raw evidence.
 
-Build the pack independently of the core wheel:
-
-```bash
-dacctl pack build htb-malevolent-modmaker --output dist
-```
-
-The command creates a deterministic archive through a temporary file, verifies that its
-expanded size and entry count are installable, and prints its SHA-256 digest. Once the
-matching registry file and immutable GitHub release asset have actually been published,
-install the independently packaged first-party pack by ID:
-
-```bash
-dacctl pack available
-dacctl pack install htb-malevolent-modmaker
-```
-
-Before that publication step, use the digest-verified local archive workflow below;
-the default network registry is a release interface, not a development fallback.
-
-The registry download is accepted only when its digest matches the registry. Installing
-a local archive requires an explicit digest:
-
-```bash
-dacctl pack install ./htb-malevolent-modmaker-0.1.1.tar.gz \
-  --sha256 79083d7e291a4687edae28c91df153c652772899c483a34bc91ee47eeb732e1b
-```
-
-The same archive can be checked against a downloaded registry before installation:
-
-```bash
-dacctl pack verify ./htb-malevolent-modmaker-0.1.1.tar.gz \
-  --registry ./registry/packs.yml
-```
-
-GitHub Actions do not validate, build, or publish packs. The configured workflows mirror
-`main` to GitLab and retain only the latest completed run for each workflow. Pack releases
-are prepared manually: the maintainer runs the validation commands below, builds the
-archive twice to confirm reproducibility, verifies its SHA-256 against
-`registry/packs.yml`, and then uploads the archive and checksum to the matching GitHub
-release. Pack code is executable code, so only install artifacts from a source you trust
-and always verify the published digest.
-
-## Malevolent ModMaker detections
+## Detection Packs
 
 | Rule | Purpose |
 | --- | --- |
 | `MMM-001` | Go PE with AES-GCM and clustered file-transformation capability |
-| `MMM-002` | PE with network retrieval and process-execution behavior |
-| `MMM-003` | Higher-confidence correlation of loader and ransomware profiles on distinct artifacts |
+| `MMM-002` | PE with network retrieval and process-execution behaviour |
+| `MMM-003` | Correlate loader and ransomware profiles on distinct artefacts |
 
-These are explainable static heuristics, not fixed challenge answers. They do not embed
-an unpublished C2 address, key, filename, or binary hash. Packed or heavily stripped
+These are explainable static heuristics. They do not embed unpublished challenge
+answers, C2 addresses, keys, filenames or binary hashes. Packed or heavily stripped
 binaries may require manual reverse engineering.
 
-## Maintainer development
+Packs are independently versioned deterministic archives. Installation verifies their
+SHA-256 digest and validates their structure before placing new versions in managed
+storage. An archive identical to the bundled pack is verified and reused from the image.
+The registry downloader has no evidence or SSH credential mounts. Custom installation
+destinations are rejected; select exact versions for repeatable runs.
 
 ```bash
-PACK_VERSION="0.1.1"
-ruff check .
-ruff format --check .
-pytest
-python -m build
-dacctl pack build htb-malevolent-modmaker --output dist-a
-dacctl pack build htb-malevolent-modmaker --output dist-b
-cmp "dist-a/htb-malevolent-modmaker-${PACK_VERSION}.tar.gz" \
-  "dist-b/htb-malevolent-modmaker-${PACK_VERSION}.tar.gz"
-dacctl pack verify "dist-a/htb-malevolent-modmaker-${PACK_VERSION}.tar.gz" \
-  --registry registry/packs.yml
+dacctl pack build htb-malevolent-modmaker --output dist
+dacctl pack verify ./dist/htb-malevolent-modmaker-0.1.2.tar.gz \
+  --registry ./registry/packs.yml
+dacctl pack install ./dist/htb-malevolent-modmaker-0.1.2.tar.gz \
+  --sha256 5bbac3d60c288865b37afc4a3e7e34aa33d3d421376ec02f4ce31d565023f57b
 ```
 
-See the [operational playbooks](docs/operations/README.md) for run procedures,
-[DEVELOPMENT.md](DEVELOPMENT.md) for the internal pack contract and release procedure,
-and [SECURITY.md](SECURITY.md) for the execution and evidence threat model.
+Registry installation by ID requires the matching registry and immutable release
+asset to have been published. GitHub Actions mirror `main` to GitLab and retain the
+latest completed workflow runs; validation and pack publication are manual.
+
+## Documentation and validation
+
+- [Architecture](docs/ARCHITECTURE.md): components, data contracts and trust boundaries.
+- [Operational playbooks](docs/operations/README.md): setup, containers, acquisition,
+  replay, pack lifecycle and troubleshooting.
+- [Maintainer development](DEVELOPMENT.md): container-based validation and releases.
+- [Security policy](SECURITY.md): operational limits and unsupported security reporting.
+
+Run the test suite through `scripts/container-test`. A successful source review or
+static check does not establish that the rootless runtime, target-only networking,
+credential separation or cleanup works on a particular host. Record real integration
+results before describing a deployment as validated.

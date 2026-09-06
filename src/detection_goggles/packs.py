@@ -15,6 +15,7 @@ from yaml.tokens import AliasToken
 from detection_goggles import __version__
 from detection_goggles.errors import ContractError, PackNotFoundError
 from detection_goggles.models import Pack, Rule
+from detection_goggles.runtime_guard import require_container
 from detection_goggles.schema import validate
 
 MAX_PACK_YAML_BYTES = 1024 * 1024
@@ -88,6 +89,7 @@ def _contained_regular_file(root: Path, relative: str, *, label: str) -> Path:
 
 
 def load_pack(path: Path) -> Pack:
+    require_container("manage", "analyse", "test")
     root = path.expanduser().resolve(strict=False)
     if root.is_file() and root.name == "pack.yml":
         root = root.parent

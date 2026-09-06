@@ -1,0 +1,51 @@
+# The amd64 manifest is pinned; refresh through review, never by a floating runtime pull.
+ARG BASE_IMAGE=docker.io/library/debian:bookworm-slim@sha256:5ae3c39ebd15e229dcedd5cee596b2497182493d41ff162e824ba13fc1b2b867
+FROM ${BASE_IMAGE} AS base
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates python3 python3-venv openssh-client tini \
+    && apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 10001 dac && useradd -u 10001 -g 10001 -m -s /usr/sbin/nologin dac \
+    && mkdir -p /opt/dac /work /input /inputs /output /reports /evidence /identity /packs \
+      /installed-packs /downloads /state /imports /credentials /scratch-source \
+    && chown -R 10001:10001 /work /input /inputs /output /reports /evidence /identity \
+      /packs /installed-packs /downloads /state /imports /credentials /scratch-source
+
+FROM base AS validation
+COPY requirements/container.lock /opt/dac/container.lock
+RUN python3 -m venv /opt/dac/validation \
+    && /opt/dac/validation/bin/pip --isolated install --no-cache-dir \
+       --require-hashes --only-binary=:all: -r /opt/dac/container.lock
+COPY . /opt/dac/source
+RUN /opt/dac/validation/bin/python -m build --wheel --no-isolation \
+      --outdir /opt/dac/wheels /opt/dac/source
+
+FROM base AS runtime
+COPY requirements/container-runtime.lock /opt/dac/container-runtime.lock
+RUN python3 -m venv /opt/dac/venv \
+    && /opt/dac/venv/bin/pip --isolated install --no-cache-dir \
+      --require-hashes --only-binary=:all: -r /opt/dac/container-runtime.lock
+COPY --from=validation /opt/dac/wheels /opt/dac/wheels
+RUN /opt/dac/venv/bin/pip --isolated install --no-deps /opt/dac/wheels/*.whl \
+    && /opt/dac/venv/bin/pip uninstall --yes setuptools \
+    && /opt/dac/venv/bin/pip check && rm -rf /opt/dac/wheels
+COPY packs /packs
+COPY containers/source.json /opt/dac/source.json
+RUN chmod -R go-w /opt/dac && dpkg-query -W > /opt/dac/os-packages.txt \
+    && /opt/dac/venv/bin/pip freeze --all > /opt/dac/python-packages.txt
+USER 10001:10001
+WORKDIR /work
+ENTRYPOINT ["/opt/dac/venv/bin/python", "-I", "-m", "detection_goggles.worker"]
+
+FROM runtime AS test
+USER 0:0
+COPY --from=validation /opt/dac/validation /opt/dac/validation
+COPY --from=validation /opt/dac/source /opt/dac/source
+RUN /opt/dac/validation/bin/pip --isolated install --no-deps --no-build-isolation /opt/dac/source
+USER 10001:10001
+ENTRYPOINT ["/opt/dac/validation/bin/python", "-I", "-m", "detection_goggles.worker"]
+
+FROM base AS network
+RUN apt-get update && apt-get install -y --no-install-recommends nftables \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+COPY containers/network_init.py /opt/dac/network_init.py
+ENTRYPOINT ["/usr/bin/python3", "-I", "/opt/dac/network_init.py"]

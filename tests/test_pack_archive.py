@@ -11,6 +11,8 @@ from detection_goggles.package_archive import build_pack_archive, install_pack_a
 from detection_goggles.packs import default_pack_roots, resolve_pack
 from detection_goggles.registry import load_registry, resolve_registry_entry
 
+pytestmark = pytest.mark.container
+
 
 def test_pack_archive_is_reproducible_and_installable(tmp_path: Path) -> None:
     pack = resolve_pack("htb-malevolent-modmaker", default_pack_roots())
